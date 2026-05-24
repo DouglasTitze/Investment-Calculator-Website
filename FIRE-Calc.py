@@ -3,6 +3,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Dict, List, Optional, Tuple
 
+# TODO - Add increasing contributions
+# Ex. Increase percentage contribution each year up to some maximum,
+# or increase by some dollar amount per year, etc.
+# TODO - Make contributions into two splits, monthly and yearly lump sum, so you can contribute 10k at the beginning of the year and then x amount monthly
+
+
 # ----------------------------
 # Constants
 # ----------------------------
@@ -15,24 +21,31 @@ CONTRIBUTION_TIMINGS = [
     DOLLAR_COST_AVERAGE_MONTHLY,
 ]
 
+ANNUAL_WITHDRAWAL_START_OF_YEAR = "Annual withdrawal at start of year"
+MONTHLY_WITHDRAWALS = "Monthly withdrawals"
+
+WITHDRAWAL_TIMINGS = [
+    ANNUAL_WITHDRAWAL_START_OF_YEAR,
+    MONTHLY_WITHDRAWALS,
+]
+
 MAX_ACCUMULATION_YEARS = 100
 MAX_DRAWDOWN_YEARS = 100
+MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR = 1_000_000
 
 
 # ----------------------------
-# Core calculator logic
+# Validation helpers
 # ----------------------------
 
-def retirement_target(expected_annual_expenses: float, withdrawal_rate_pct: float) -> float:
-    """
-    Returns the total amount of money needed for retirement.
-    """
-    withdrawal_rate = withdrawal_rate_pct / 100
+def validate_contribution_timing(contribution_timing: str) -> None:
+    if contribution_timing not in CONTRIBUTION_TIMINGS:
+        raise ValueError("Invalid contribution timing selected.")
 
-    if withdrawal_rate <= 0:
-        raise ValueError("Withdrawal rate must be greater than 0.")
 
-    return expected_annual_expenses / withdrawal_rate
+def validate_withdrawal_timing(withdrawal_timing: str) -> None:
+    if withdrawal_timing not in WITHDRAWAL_TIMINGS:
+        raise ValueError("Invalid withdrawal timing selected.")
 
 
 def convert_to_years(years: float) -> int:
@@ -50,12 +63,29 @@ def convert_to_years(years: float) -> int:
     return rounded_years
 
 
-def validate_contribution_timing(contribution_timing: str) -> None:
-    if contribution_timing not in CONTRIBUTION_TIMINGS:
-        raise ValueError("Invalid contribution timing selected.")
+# ----------------------------
+# Core calculator logic
+# ----------------------------
+
+
+def retirement_target(
+    *,
+    expected_annual_expenses: float,
+    withdrawal_rate_pct: float,
+) -> float:
+    """
+    Returns the total amount of money needed for retirement.
+    """
+    withdrawal_rate = withdrawal_rate_pct / 100
+
+    if withdrawal_rate <= 0:
+        raise ValueError("Withdrawal rate must be greater than 0.")
+
+    return expected_annual_expenses / withdrawal_rate
 
 
 def grow_balance_for_one_year(
+    *,
     starting_balance: float,
     annual_savings: float,
     annual_return_pct: float,
@@ -103,12 +133,9 @@ def grow_balance_for_one_year(
         return balance
 
     else:
-        raise Exception("Other contribution types are not implemented")
+        raise ValueError("Other contribution types are not implemented")
 
-# CONITNUE REFINEMENT HERE
-# CONITNUE REFINEMENT HERE
-# CONITNUE REFINEMENT HERE
-# CONITNUE REFINEMENT HERE
+
 def project_accumulation_timeline(
     *,
     initial_balance: float,
@@ -128,6 +155,8 @@ def project_accumulation_timeline(
       - investment growth
       - ending balance
     """
+    validate_contribution_timing(contribution_timing)
+
     if years < 0:
         raise ValueError("Years cannot be negative.")
 
@@ -197,7 +226,10 @@ def solve_years_to_retirement(
     if annual_savings < 0:
         raise ValueError("Annual savings cannot be negative.")
 
-    target = retirement_target(expected_annual_expenses, withdrawal_rate_pct)
+    target = retirement_target(
+        expected_annual_expenses=expected_annual_expenses,
+        withdrawal_rate_pct=withdrawal_rate_pct,
+    )
 
     timeline = project_accumulation_timeline(
         initial_balance=initial_balance,
@@ -270,161 +302,190 @@ def solve_annual_savings(
     if expected_annual_expenses <= 0:
         raise ValueError("Expected annual expenses must be greater than 0.")
 
-    target = retirement_target(expected_annual_expenses, withdrawal_rate_pct)
+    if years <= 0:
+        raise ValueError("Expected years to retirement must be greater than 0.")
 
-    if years == 0:
-        if initial_balance >= target:
-            timeline = project_accumulation_timeline(
-                initial_balance=initial_balance,
-                annual_savings=0,
-                annual_return_pct=annual_return_pct,
-                contribution_timing=contribution_timing,
-                years=0,
-            )
-            return 0.0, timeline
+    target = retirement_target(
+        expected_annual_expenses=expected_annual_expenses,
+        withdrawal_rate_pct=withdrawal_rate_pct,
+    )
 
-        raise ValueError("Cannot reach the target in 0 years.")
-
-    def ending_balance_for_savings(savings: float) -> float:
-        timeline = project_accumulation_timeline(
+    def timeline_for_savings(savings: float) -> List[Dict[str, float]]:
+        return project_accumulation_timeline(
             initial_balance=initial_balance,
             annual_savings=savings,
             annual_return_pct=annual_return_pct,
             contribution_timing=contribution_timing,
             years=years,
         )
-        return timeline[-1]["ending_balance"]
 
-    if ending_balance_for_savings(0) >= target:
-        timeline = project_accumulation_timeline(
-            initial_balance=initial_balance,
-            annual_savings=0,
-            annual_return_pct=annual_return_pct,
-            contribution_timing=contribution_timing,
-            years=years,
-        )
-        return 0.0, timeline
+    # If the current balance can grow to the target without further contributions,
+    # then the required annual savings is $0.
+    zero_savings_timeline = timeline_for_savings(0)
+
+    if zero_savings_timeline[-1]["ending_balance"] >= target:
+        return 0.0, zero_savings_timeline
 
     low = 0.0
-    high = max(1.0, expected_annual_expenses)
+    high = max(25.0, expected_annual_expenses)
 
-    while ending_balance_for_savings(high) < target:
+    while timeline_for_savings(high)[-1]["ending_balance"] < target:
         high *= 2
 
-        if high > 1_000_000_000:
+        if high > MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR:
             raise ValueError("Required annual savings is too high to calculate.")
 
-    for _ in range(80):
+    # 100 iterations is an arbitrary number just to allow binary search to complete
+    for _ in range(100):
         mid = (low + high) / 2
 
-        if ending_balance_for_savings(mid) >= target:
+        if timeline_for_savings(mid)[-1]["ending_balance"] >= target:
             high = mid
         else:
             low = mid
 
     annual_savings = high
-
-    timeline = project_accumulation_timeline(
-        initial_balance=initial_balance,
-        annual_savings=annual_savings,
-        annual_return_pct=annual_return_pct,
-        contribution_timing=contribution_timing,
-        years=years,
-    )
+    timeline = timeline_for_savings(annual_savings)
 
     return annual_savings, timeline
 
 
 def project_drawdown_timeline(
+    *,
     starting_balance: float,
-    withdrawal_rate_pct: float,
     expected_annual_expenses: float,
     annual_return_pct: float,
     inflation_rate_pct: float,
+    withdrawal_timing: str,
 ) -> Dict[str, Any]:
     """
-    Calculates how long it takes to go broke after retirement.
+    Returns a year-by-year retirement drawdown timeline.
 
-    This uses the simplified formula requested:
+    Annual withdrawal model:
+      1. Withdraw the full year's expenses at the beginning of the year.
+      2. Apply investment growth to the remaining balance.
 
-      net_loss_rate = withdrawal_rate - (annual_return_rate + inflation_rate)
+    Monthly withdrawal model:
+      1. Withdraw expected_annual_expenses / 12 at the beginning of each month.
+      2. Apply monthly investment growth after each withdrawal.
 
-    If net_loss_rate <= 0, the account does not go broke under this model.
-    If net_loss_rate > 0, the account loses that percentage every year.
+    Inflation increases the planned withdrawal amount each year.
     """
+
+    validate_withdrawal_timing(withdrawal_timing)
+
     if starting_balance < 0:
         raise ValueError("Starting balance cannot be negative.")
 
-    withdrawal_rate = withdrawal_rate_pct / 100
+    if expected_annual_expenses <= 0:
+        raise ValueError("Expected annual expenses must be greater than 0.")
+
     annual_return_rate = annual_return_pct / 100
     inflation_rate = inflation_rate_pct / 100
 
-    if withdrawal_rate <= 0:
-        raise ValueError("Withdrawal rate must be greater than 0.")
+    if annual_return_rate <= -1:
+        raise ValueError("Annual return must be greater than -100%.")
 
-    if annual_return_rate <= 0:
-        raise ValueError("Annual return must be greater than 0%.")
-
-    net_loss_rate = withdrawal_rate - (annual_return_rate + inflation_rate)
+    if inflation_rate < 0:
+        raise ValueError("Inflation rate cannot be negative.")
 
     records = [
         {
             "year": 0,
             "starting_balance": starting_balance,
-            "net_loss_amount": 0.0,
+            "base_withdrawal": 0.0,
+            "inflation_adjustment": 0.0,
+            "planned_withdrawal": 0.0,
+            "actual_withdrawal": 0.0,
+            "investment_growth": 0.0,
             "ending_balance": starting_balance,
+            "shortfall": 0.0,
         }
     ]
 
-    if starting_balance < expected_annual_expenses:
-        return {
-            "net_loss_rate": net_loss_rate,
-            "years_until_broke": 0,
-            "never_broke": False,
-            "timeline": records,
-        }
-
-    if net_loss_rate <= 0:
-        return {
-            "net_loss_rate": net_loss_rate,
-            "years_until_broke": None,
-            "never_broke": True,
-            "timeline": records,
-        }
-
     balance = starting_balance
+    annual_expenses = expected_annual_expenses
 
     for year in range(1, MAX_DRAWDOWN_YEARS + 1):
         starting_balance_for_year = balance
-        net_loss_amount = starting_balance_for_year * net_loss_rate
-        ending_balance = starting_balance_for_year - net_loss_amount
+        base_withdrawal = expected_annual_expenses
+        planned_withdrawal = annual_expenses
+        inflation_adjustment = planned_withdrawal - base_withdrawal
 
-        if ending_balance < 0:
-            ending_balance = 0
+        actual_withdrawal = 0.0
+        investment_growth = 0.0
+        shortfall = 0.0
+
+        if withdrawal_timing == ANNUAL_WITHDRAWAL_START_OF_YEAR:
+            # Full annual withdrawal happens first, so the withdrawn money
+            # receives no investment return that year.
+            actual_withdrawal = min(balance, planned_withdrawal)
+            shortfall = planned_withdrawal - actual_withdrawal
+
+            balance -= actual_withdrawal
+
+            balance_before_growth = balance
+            balance *= 1 + annual_return_rate
+            investment_growth = balance - balance_before_growth
+
+        elif withdrawal_timing == MONTHLY_WITHDRAWALS:
+            monthly_withdrawal = planned_withdrawal / 12
+
+            # Effective monthly growth makes 12 months equal the annual return.
+            monthly_growth_multiplier = (1 + annual_return_rate) ** (1 / 12)
+
+            for _ in range(12):
+                actual_monthly_withdrawal = min(balance, monthly_withdrawal)
+                monthly_shortfall = monthly_withdrawal - actual_monthly_withdrawal
+
+                actual_withdrawal += actual_monthly_withdrawal
+                shortfall += monthly_shortfall
+
+                balance -= actual_monthly_withdrawal
+
+                if monthly_shortfall > 0:
+                    balance = 0.0
+                    break
+
+                balance_before_growth = balance
+                balance *= monthly_growth_multiplier
+                investment_growth += balance - balance_before_growth
+
+        else:
+            raise ValueError("Other withdrawal types are not implemented.")
+
+        if balance < 0:
+            balance = 0.0
 
         records.append(
             {
                 "year": float(year),
                 "starting_balance": starting_balance_for_year,
-                "net_loss_amount": net_loss_amount,
-                "ending_balance": ending_balance,
+                "base_withdrawal": base_withdrawal,
+                "inflation_adjustment": inflation_adjustment,
+                "planned_withdrawal": planned_withdrawal,
+                "actual_withdrawal": actual_withdrawal,
+                "investment_growth": investment_growth,
+                "ending_balance": balance,
+                "shortfall": shortfall,
             }
         )
 
-        balance = ending_balance
-
-        if balance < expected_annual_expenses:
+        if shortfall > 0 or balance <= 0:
             return {
-                "net_loss_rate": net_loss_rate,
                 "years_until_broke": year,
                 "never_broke": False,
+                "withdrawal_timing": withdrawal_timing,
                 "timeline": records,
             }
 
+        # Next year's expenses increase with inflation.
+        annual_expenses *= 1 + inflation_rate
+
     return {
-        "net_loss_rate": net_loss_rate,
         "years_until_broke": None,
         "never_broke": False,
+        "withdrawal_timing": withdrawal_timing,
         "timeline": records,
     }
 
@@ -439,6 +500,7 @@ def solve_retirement_plan(
     withdrawal_rate_pct: float,
     inflation_rate_pct: float,
     contribution_timing: str,
+    withdrawal_timing: str,
 ) -> Dict[str, Any]:
     """
     Provide exactly 2 of these 3 values:
@@ -450,6 +512,7 @@ def solve_retirement_plan(
     Leave the unknown value as None, and this function calculates it.
     """
     validate_contribution_timing(contribution_timing)
+    validate_withdrawal_timing(withdrawal_timing)
 
     core_values = {
         "years_to_retirement": years_to_retirement,
@@ -474,6 +537,9 @@ def solve_retirement_plan(
 
     if withdrawal_rate_pct <= 0:
         raise ValueError("Withdrawal rate must be greater than 0.")
+
+    if inflation_rate_pct < 0:
+        raise ValueError("Inflation rate cannot be negative.")
 
     calculated_field = ""
 
@@ -516,14 +582,18 @@ def solve_retirement_plan(
         )
 
     portfolio_at_retirement = accumulation_timeline[-1]["ending_balance"]
-    target = retirement_target(expected_annual_expenses, withdrawal_rate_pct)
+
+    target = retirement_target(
+        expected_annual_expenses=expected_annual_expenses,
+        withdrawal_rate_pct=withdrawal_rate_pct,
+    )
 
     drawdown = project_drawdown_timeline(
         starting_balance=portfolio_at_retirement,
-        withdrawal_rate_pct=withdrawal_rate_pct,
         expected_annual_expenses=expected_annual_expenses,
         annual_return_pct=annual_return_pct,
         inflation_rate_pct=inflation_rate_pct,
+        withdrawal_timing=withdrawal_timing,
     )
 
     return {
@@ -536,6 +606,7 @@ def solve_retirement_plan(
         "target_portfolio": target,
         "portfolio_at_retirement": portfolio_at_retirement,
         "contribution_timing": contribution_timing,
+        "withdrawal_timing": withdrawal_timing,
         "accumulation_timeline": accumulation_timeline,
         "drawdown": drawdown,
     }
@@ -545,13 +616,8 @@ def solve_retirement_plan(
 # Formatting helpers
 # ----------------------------
 
-
 def money(value: float) -> str:
     return f"${value:,.0f}"
-
-
-def percent_from_rate(rate: float) -> str:
-    return f"{rate * 100:.2f}%"
 
 
 def format_accumulation_timeline(
@@ -589,8 +655,14 @@ def format_drawdown_timeline(
 
     rows = [
         "Retirement drawdown projection:",
-        "Year | Start Balance | Net Loss | End Balance",
-        "-----|---------------|----------|------------",
+        (
+            "Year | Start Balance | Base Withdrawal | Inflation Adj. | "
+            "Planned Withdrawal | Actual Withdrawal | Growth | End Balance | Shortfall"
+        ),
+        (
+            "-----|---------------|-----------------|----------------|"
+            "-------------------|-------------------|--------|-------------|----------"
+        ),
     ]
 
     visible_records = timeline[:max_rows]
@@ -599,8 +671,13 @@ def format_drawdown_timeline(
         rows.append(
             f"{int(record['year']):>4} | "
             f"{money(record['starting_balance']):>13} | "
-            f"{money(record['net_loss_amount']):>8} | "
-            f"{money(record['ending_balance']):>11}"
+            f"{money(record['base_withdrawal']):>15} | "
+            f"{money(record['inflation_adjustment']):>14} | "
+            f"{money(record['planned_withdrawal']):>17} | "
+            f"{money(record['actual_withdrawal']):>17} | "
+            f"{money(record['investment_growth']):>6} | "
+            f"{money(record['ending_balance']):>11} | "
+            f"{money(record['shortfall']):>8}"
         )
 
     if len(timeline) > max_rows:
@@ -624,7 +701,7 @@ class RetirementCalculatorGUI:
         fields = [
             ("Years to Retirement", ""),
             ("Expected Annual Expenses", "70000"),
-            ("Annual Savings", "459"),  # 399, 459, 519
+            ("Annual Savings", "459"),
             ("Current Portfolio Value", "936"),
             ("Annual Return %", "10"),
             ("Inflation Rate %", "3"),
@@ -648,18 +725,30 @@ class RetirementCalculatorGUI:
         )
 
         row_offset = 0
+
         for row, (label, default) in enumerate(fields, start=1):
             if row in [2, 5]:
                 row_offset += 1
                 ttk.Label(frame, text="").grid(
-                    row=row_offset, column=0, sticky="w", pady=4
+                    row=row_offset,
+                    column=0,
+                    sticky="w",
+                    pady=4,
                 )
                 ttk.Label(frame, text="").grid(
-                    row=row_offset, column=1, sticky="w", pady=4
+                    row=row_offset,
+                    column=1,
+                    sticky="w",
+                    pady=4,
                 )
+
             row_offset += 1
+
             ttk.Label(frame, text=label).grid(
-                row=row_offset, column=0, sticky="w", pady=4
+                row=row_offset,
+                column=0,
+                sticky="w",
+                pady=4,
             )
 
             entry = ttk.Entry(frame, width=28)
@@ -668,10 +757,10 @@ class RetirementCalculatorGUI:
 
             self.inputs[label] = entry
 
-        timing_row = row_offset + 1
+        contribution_timing_row = row_offset + 1
 
         ttk.Label(frame, text="Contribution Timing").grid(
-            row=timing_row,
+            row=contribution_timing_row,
             column=0,
             sticky="w",
             pady=4,
@@ -679,16 +768,46 @@ class RetirementCalculatorGUI:
 
         self.contribution_timing = tk.StringVar(value=LUMP_SUM_START_OF_YEAR)
 
-        timing_dropdown = ttk.Combobox(
+        contribution_dropdown = ttk.Combobox(
             frame,
             textvariable=self.contribution_timing,
             values=CONTRIBUTION_TIMINGS,
             state="readonly",
             width=26,
         )
-        timing_dropdown.grid(row=timing_row, column=1, pady=4, sticky="ew")
+        contribution_dropdown.grid(
+            row=contribution_timing_row,
+            column=1,
+            pady=4,
+            sticky="ew",
+        )
 
-        button_row = timing_row + 1
+        withdrawal_timing_row = contribution_timing_row + 1
+
+        ttk.Label(frame, text="Withdrawal Timing").grid(
+            row=withdrawal_timing_row,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+
+        self.withdrawal_timing = tk.StringVar(value=ANNUAL_WITHDRAWAL_START_OF_YEAR)
+
+        withdrawal_dropdown = ttk.Combobox(
+            frame,
+            textvariable=self.withdrawal_timing,
+            values=WITHDRAWAL_TIMINGS,
+            state="readonly",
+            width=26,
+        )
+        withdrawal_dropdown.grid(
+            row=withdrawal_timing_row,
+            column=1,
+            pady=4,
+            sticky="ew",
+        )
+
+        button_row = withdrawal_timing_row + 1
 
         ttk.Button(frame, text="Calculate", command=self.calculate).grid(
             row=button_row,
@@ -700,7 +819,7 @@ class RetirementCalculatorGUI:
 
         self.result = tk.Text(
             frame,
-            width=86,
+            width=118,
             height=34,
             wrap="none",
             font=("Courier", 10),
@@ -736,6 +855,7 @@ class RetirementCalculatorGUI:
                 withdrawal_rate_pct=self.get_required_float("Withdrawal Rate %"),
                 inflation_rate_pct=self.get_required_float("Inflation Rate %"),
                 contribution_timing=self.contribution_timing.get(),
+                withdrawal_timing=self.withdrawal_timing.get(),
             )
 
             calculated_field = summary["calculated_field"]
@@ -752,39 +872,28 @@ class RetirementCalculatorGUI:
                 )
             else:
                 calculated_line = (
-                    f"Calculated annual savings: " f"{money(summary['annual_savings'])}"
+                    f"Calculated annual savings: {money(summary['annual_savings'])}"
                 )
 
             drawdown = summary["drawdown"]
-            net_loss_rate = drawdown["net_loss_rate"]
 
-            if drawdown["never_broke"]:
-                broke_line = (
-                    "Years until broke: never under this model "
-                    f"(net loss rate is {percent_from_rate(net_loss_rate)})"
-                )
-            elif drawdown["years_until_broke"] is None:
-                broke_line = (
-                    f"Years until broke: more than {MAX_DRAWDOWN_YEARS} years "
-                    f"(net loss rate is {percent_from_rate(net_loss_rate)})"
-                )
+            if drawdown["years_until_broke"] is None:
+                broke_line = f"Years until broke: more than {MAX_DRAWDOWN_YEARS} years"
             else:
-                broke_line = (
-                    f"Years until broke: {drawdown['years_until_broke']} "
-                    f"(net loss rate is {percent_from_rate(net_loss_rate)})"
-                )
+                broke_line = f"Years until broke: {drawdown['years_until_broke']}"
 
             output = (
                 f"{calculated_line}\n\n"
+                f"Contribution timing: {summary['contribution_timing']}\n"
+                f"Withdrawal timing: {summary['withdrawal_timing']}\n"
                 f"Years to retirement: {summary['years_to_retirement']:.0f}\n"
                 f"Expected annual expenses: {money(summary['expected_annual_expenses'])}\n"
+                f"Annual savings: {money(summary['annual_savings'])}\n"
                 f"Monthly expenses: {money(summary['monthly_expenses'])}\n"
                 f"Monthly savings: {money(summary['monthly_savings'])}\n"
                 f"Target portfolio: {money(summary['target_portfolio'])}\n"
                 f"Projected portfolio at retirement: {money(summary['portfolio_at_retirement'])}\n"
                 f"{broke_line}\n\n"
-                f"Drawdown formula used:\n"
-                f"  withdrawal_rate - (annual_return_rate + inflation_rate)\n\n"
                 f"{format_accumulation_timeline(summary['accumulation_timeline'])}\n\n"
                 f"{format_drawdown_timeline(drawdown)}\n"
             )
