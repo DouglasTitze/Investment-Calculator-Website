@@ -77,10 +77,6 @@ def retirement_target(
     Returns the total amount of money needed for retirement.
     """
     withdrawal_rate = withdrawal_rate_pct / 100
-
-    if withdrawal_rate <= 0:
-        raise ValueError("Withdrawal rate must be greater than 0.")
-
     return expected_annual_expenses / withdrawal_rate
 
 
@@ -100,18 +96,7 @@ def grow_balance_for_one_year(
         Savings are split into 12 monthly investments.
         Growth is applied month-by-month.
     """
-    validate_contribution_timing(contribution_timing)
-
-    if starting_balance < 0:
-        raise ValueError("Current portfolio value cannot be negative.")
-
-    if annual_savings < 0:
-        raise ValueError("Annual savings cannot be negative.")
-
     annual_return_rate = annual_return_pct / 100
-
-    if annual_return_rate <= 0:
-        raise ValueError("Annual return must be greater than 0%.")
 
     if contribution_timing == LUMP_SUM_START_OF_YEAR:
         annual_growth_multiplier = 1 + annual_return_rate
@@ -155,17 +140,6 @@ def project_accumulation_timeline(
       - investment growth
       - ending balance
     """
-    validate_contribution_timing(contribution_timing)
-
-    if years < 0:
-        raise ValueError("Years cannot be negative.")
-
-    if initial_balance < 0:
-        raise ValueError("Current portfolio value cannot be negative.")
-
-    if annual_savings < 0:
-        raise ValueError("Annual savings cannot be negative.")
-
     records = [
         {
             "year": 0,
@@ -220,12 +194,6 @@ def solve_years_to_retirement(
     """
     Calculates how many whole years it will take to reach the retirement target.
     """
-    if expected_annual_expenses <= 0:
-        raise ValueError("Expected annual expenses must be greater than 0.")
-
-    if annual_savings < 0:
-        raise ValueError("Annual savings cannot be negative.")
-
     target = retirement_target(
         expected_annual_expenses=expected_annual_expenses,
         withdrawal_rate_pct=withdrawal_rate_pct,
@@ -250,7 +218,7 @@ def solve_years_to_retirement(
 
 def solve_expected_annual_expenses(
     *,
-    years_to_retirement: float,
+    years_to_retirement: int,
     annual_savings: float,
     initial_balance: float,
     annual_return_pct: float,
@@ -260,19 +228,15 @@ def solve_expected_annual_expenses(
     """
     Calculates how much annual spending the future portfolio can support.
     """
-    years = convert_to_years(years_to_retirement)
 
     withdrawal_rate = withdrawal_rate_pct / 100
-
-    if withdrawal_rate <= 0:
-        raise ValueError("Withdrawal rate must be greater than 0.")
 
     timeline = project_accumulation_timeline(
         initial_balance=initial_balance,
         annual_savings=annual_savings,
         annual_return_pct=annual_return_pct,
         contribution_timing=contribution_timing,
-        years=years,
+        years=years_to_retirement,
     )
 
     future_balance = timeline[-1]["ending_balance"]
@@ -284,7 +248,7 @@ def solve_expected_annual_expenses(
 
 def solve_annual_savings(
     *,
-    years_to_retirement: float,
+    years_to_retirement: int,
     expected_annual_expenses: float,
     initial_balance: float,
     annual_return_pct: float,
@@ -297,14 +261,6 @@ def solve_annual_savings(
     Uses binary search because lump-sum and dollar-cost-average contribution timing
     produce different year-by-year values.
     """
-    years = convert_to_years(years_to_retirement)
-
-    if expected_annual_expenses <= 0:
-        raise ValueError("Expected annual expenses must be greater than 0.")
-
-    if years <= 0:
-        raise ValueError("Expected years to retirement must be greater than 0.")
-
     target = retirement_target(
         expected_annual_expenses=expected_annual_expenses,
         withdrawal_rate_pct=withdrawal_rate_pct,
@@ -316,7 +272,7 @@ def solve_annual_savings(
             annual_savings=savings,
             annual_return_pct=annual_return_pct,
             contribution_timing=contribution_timing,
-            years=years,
+            years=years_to_retirement,
         )
 
     # If the current balance can grow to the target without further contributions,
@@ -326,6 +282,7 @@ def solve_annual_savings(
     if zero_savings_timeline[-1]["ending_balance"] >= target:
         return 0.0, zero_savings_timeline
 
+    # Perform binary seach to find required annual savings
     low = 0.0
     high = max(25.0, expected_annual_expenses)
 
@@ -335,7 +292,7 @@ def solve_annual_savings(
         if high > MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR:
             raise ValueError("Required annual savings is too high to calculate.")
 
-    # 100 iterations is an arbitrary number just to allow binary search to complete
+    # 100 iterations is an arbitrary number
     for _ in range(100):
         mid = (low + high) / 2
 
@@ -345,9 +302,7 @@ def solve_annual_savings(
             low = mid
 
     annual_savings = high
-    timeline = timeline_for_savings(annual_savings)
-
-    return annual_savings, timeline
+    return annual_savings, timeline_for_savings(annual_savings)
 
 
 def project_drawdown_timeline(
@@ -372,22 +327,8 @@ def project_drawdown_timeline(
     Inflation increases the planned withdrawal amount each year.
     """
 
-    validate_withdrawal_timing(withdrawal_timing)
-
-    if starting_balance < 0:
-        raise ValueError("Starting balance cannot be negative.")
-
-    if expected_annual_expenses <= 0:
-        raise ValueError("Expected annual expenses must be greater than 0.")
-
     annual_return_rate = annual_return_pct / 100
     inflation_rate = inflation_rate_pct / 100
-
-    if annual_return_rate <= -1:
-        raise ValueError("Annual return must be greater than -100%.")
-
-    if inflation_rate < 0:
-        raise ValueError("Inflation rate cannot be negative.")
 
     records = [
         {
@@ -532,14 +473,34 @@ def solve_retirement_plan(
     if initial_balance < 0:
         raise ValueError("Current portfolio value cannot be negative.")
 
-    if annual_return_pct <= -100:
-        raise ValueError("Annual return must be greater than -100%.")
+    if annual_return_pct <= 0:
+        raise ValueError("Annual return must be greater than 0%.")
 
     if withdrawal_rate_pct <= 0:
         raise ValueError("Withdrawal rate must be greater than 0.")
 
     if inflation_rate_pct < 0:
         raise ValueError("Inflation rate cannot be negative.")
+
+    if years_to_retirement is not None:
+        years_to_retirement = convert_to_years(years_to_retirement)
+
+    if expected_annual_expenses is not None and expected_annual_expenses <= 0:
+        raise ValueError("Expected annual expenses must be greater than 0.")
+
+    if annual_savings is not None and annual_savings < 0:
+        raise ValueError("Annual savings cannot be negative.")
+
+    if annual_savings is None and years_to_retirement is not None:
+        if years_to_retirement <= 0:
+            raise ValueError("Expected years to retirement must be greater than 0.")
+
+    if (
+        expected_annual_expenses is None
+        and initial_balance == 0
+        and annual_savings == 0
+    ):
+        raise ValueError("Expected annual expenses must be greater than 0.")
 
     calculated_field = ""
 
