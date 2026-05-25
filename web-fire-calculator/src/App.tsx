@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Area,
+  Bar,
   CartesianGrid,
   ComposedChart,
   Legend,
@@ -32,11 +33,15 @@ const DISPLAY_MODES = [
   DISPLAY_TODAYS_DOLLARS,
   DISPLAY_NOMINAL_DOLLARS,
 ] as const;
+const STANDARD_CHART = "Standard";
+const BAR_CHART = "Bar graph";
+const CHART_MODES = [STANDARD_CHART, BAR_CHART] as const;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
 
 type AssetKey = "stocks" | "bonds" | "cash";
 type DisplayMode = (typeof DISPLAY_MODES)[number];
+type ChartMode = (typeof CHART_MODES)[number];
 type ContributionStopMode =
   | typeof STOP_CONTRIBUTING_AT_FIRE
   | typeof STOP_CONTRIBUTING_AT_AGE;
@@ -56,7 +61,9 @@ type ProjectionPoint = {
   contributions: number;
   growth: number;
   withdrawals: number;
+  realWithdrawals: number;
   annualWithdrawal: number;
+  annualWithdrawalYear: number;
 };
 
 type Plan = {
@@ -504,7 +511,9 @@ function calculatePlan(args: {
       contributions,
       growth: Math.max(record.endingBalance - contributions, 0),
       withdrawals: 0,
+      realWithdrawals: 0,
       annualWithdrawal: 0,
+      annualWithdrawalYear: record.year,
     });
   }
 
@@ -516,6 +525,7 @@ function calculatePlan(args: {
   let contributionBucket = Math.min(contributions, portfolioAtRetirement);
   let growthBucket = Math.max(portfolioAtRetirement - contributionBucket, 0);
   let cumulativeWithdrawals = 0;
+  let cumulativeRealWithdrawals = 0;
   let yearsFunded = 0;
   const maxDrawdownYears = fireReachable
     ? Math.min(
@@ -543,6 +553,11 @@ function calculatePlan(args: {
     );
     portfolio = contributionBucket + growthBucket;
     cumulativeWithdrawals += actualWithdrawal;
+    cumulativeRealWithdrawals += todayValue(
+      actualWithdrawal,
+      inflationRatePct,
+      absoluteYear,
+    );
     const balanceBeforeGrowth = portfolio;
     portfolio *= 1 + effectiveReturnPct;
     const investmentGrowth = portfolio - balanceBeforeGrowth;
@@ -558,7 +573,9 @@ function calculatePlan(args: {
       contributions: contributionBucket,
       growth: growthBucket,
       withdrawals: cumulativeWithdrawals,
+      realWithdrawals: cumulativeRealWithdrawals,
       annualWithdrawal: actualWithdrawal,
+      annualWithdrawalYear: absoluteYear,
     });
 
     if (actualWithdrawal < plannedWithdrawal || portfolio <= 0) break;
@@ -636,6 +653,31 @@ function SegmentedControl(props: {
           onClick={() => props.onChange(mode)}
         >
           {mode}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ChartModeToggle(props: {
+  value: ChartMode;
+  onChange: (value: ChartMode) => void;
+}) {
+  return (
+    <div className="chart-mode-toggle" aria-label="Projection chart view">
+      {CHART_MODES.map((mode) => (
+        <button
+          key={mode}
+          type="button"
+          className={props.value === mode ? "active" : ""}
+          onClick={() => props.onChange(mode)}
+        >
+          {mode === STANDARD_CHART ? (
+            <TrendingUp size={16} aria-hidden="true" />
+          ) : (
+            <BarChart3 size={16} aria-hidden="true" />
+          )}
+          <span>{mode}</span>
         </button>
       ))}
     </div>
@@ -743,30 +785,57 @@ type TooltipEntry = {
 function ProjectionTooltip(props: {
   active?: boolean;
   payload?: TooltipEntry[];
+  chartMode: ChartMode;
+  displayMode: DisplayMode;
 }) {
   if (!props.active || !props.payload?.length) return null;
 
   const point = props.payload[0]?.payload as ProjectionPoint;
-  const values = props.payload.filter((entry) =>
-    ["portfolio", "contributionShade", "growthShade", "withdrawals"].includes(
-      entry.dataKey,
-    ),
+  const details = props.payload.filter((entry) =>
+    [
+      "contributionShade",
+      "growthShade",
+      "withdrawals",
+      "withdrawalBar",
+    ].includes(entry.dataKey),
   );
+  const total = point.portfolio;
 
   return (
-    <div className="chart-tooltip">
+    <div
+      className={
+        props.chartMode === BAR_CHART
+          ? "chart-tooltip bar-chart-tooltip"
+          : "chart-tooltip"
+      }
+    >
       <p className="tooltip-title">
         Age {point.age} - {point.phase}
       </p>
-      {values.map((entry) => (
-        <div key={entry.dataKey} className="tooltip-line">
-          <span>{entry.name ?? entry.dataKey}</span>
-          <strong>{money(entry.value)}</strong>
-        </div>
-      ))}
-      {point.annualWithdrawal > 0 ? (
+      <div className="tooltip-total">
+        <span>Total</span>
+        <strong>{money(total)}</strong>
+      </div>
+      {details.map((entry) => {
+        const label =
+          entry.dataKey === "contributionShade"
+            ? "Contributions"
+            : entry.dataKey === "growthShade"
+              ? "Growth"
+              : "Spending";
+        return (
+          <div key={entry.dataKey} className="tooltip-line">
+            <span className={`tooltip-marker ${entry.dataKey}`} />
+            <span>{label}</span>
+            <strong>{money(Math.abs(entry.value))}</strong>
+          </div>
+        );
+      })}
+      {point.annualWithdrawal > 0 &&
+      props.displayMode === DISPLAY_NOMINAL_DOLLARS ? (
         <div className="tooltip-line">
-          <span>annual draw</span>
+          <span className="tooltip-marker annualWithdrawal" />
+          <span>Annual draw</span>
           <strong>{money(point.annualWithdrawal)}</strong>
         </div>
       ) : null}
@@ -785,6 +854,7 @@ export default function App() {
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     DISPLAY_TODAYS_DOLLARS,
   );
+  const [chartMode, setChartMode] = useState<ChartMode>(STANDARD_CHART);
   const [contributionStopMode, setContributionStopMode] =
     useState<ContributionStopMode>(STOP_CONTRIBUTING_AT_FIRE);
   const [contributionStopAge, setContributionStopAge] = useState("60");
@@ -853,17 +923,29 @@ export default function App() {
         inflation,
         point.year,
       ),
-      withdrawals: displayAmount(
-        point.withdrawals,
-        displayMode,
-        inflation,
-        point.year,
-      ),
+      withdrawals:
+        displayMode === DISPLAY_TODAYS_DOLLARS
+          ? point.realWithdrawals
+          : displayAmount(
+              point.withdrawals,
+              displayMode,
+              inflation,
+              point.year,
+            ),
+      withdrawalBar:
+        displayMode === DISPLAY_TODAYS_DOLLARS
+          ? -point.realWithdrawals
+          : -displayAmount(
+              point.withdrawals,
+              displayMode,
+              inflation,
+              point.year,
+            ),
       annualWithdrawal: displayAmount(
         point.annualWithdrawal,
         displayMode,
         inflation,
-        point.year,
+        point.annualWithdrawalYear,
       ),
       fireTarget: displayAmount(
         plan.futureFireTarget,
@@ -1108,97 +1190,154 @@ export default function App() {
 
       <section className="projection-card">
         <p className="eyebrow">The journey ahead</p>
-        <h2>Your FIRE projection</h2>
+        <div className="projection-heading">
+          <h2>Your FIRE projection</h2>
+        </div>
 
         <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart
-              data={chartData}
-              margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
-            >
-              <CartesianGrid stroke="#edf0fb" vertical={false} />
-              <XAxis
-                dataKey="age"
-                tickLine={false}
-                axisLine={false}
-                minTickGap={28}
-                label={{
-                  value: "Age",
-                  position: "insideBottom",
-                  offset: -10,
-                  fill: "#001a52",
-                  fontSize: 12,
-                }}
-              />
-              <YAxis
-                orientation="right"
-                tickFormatter={compactMoney}
-                tickLine={false}
-                axisLine={false}
-                width={58}
-              />
-              <Tooltip content={<ProjectionTooltip />} />
-              <Legend
-                verticalAlign="bottom"
-                iconType="circle"
-                wrapperStyle={{ paddingTop: 24 }}
-              />
-              <ReferenceLine
-                y={displayedFireTarget}
-                stroke="#147a52"
-                strokeDasharray="3 3"
-                label={{
-                  value: `Goal: ${compactMoney(displayedFireTarget)}`,
-                  position: "insideTopLeft",
-                  fill: "#147a52",
-                }}
-              />
-              <ReferenceLine
-                x={plan.retirementAge}
-                stroke="#d7d7df"
-                label={{
-                  value: plan.fireReachable
-                    ? `Retire at ${plan.retirementAge}`
-                    : `Projected to ${plan.retirementAge}`,
-                  position: "top",
-                  fill: "#5130ee",
-                }}
-              />
+          <div
+            className={
+              chartMode === BAR_CHART
+                ? "chart-stage bar-chart-stage"
+                : "chart-stage"
+            }
+            style={
+              chartMode === BAR_CHART
+                ? { minWidth: `${Math.max(880, chartData.length * 34)}px` }
+                : undefined
+            }
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={chartData}
+                margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
+                barCategoryGap={chartMode === BAR_CHART ? "18%" : undefined}
+                barGap={chartMode === BAR_CHART ? 0 : undefined}
+              >
+                <CartesianGrid stroke="#edf0fb" vertical={false} />
+                <XAxis
+                  dataKey="age"
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={28}
+                  label={{
+                    value: "Age",
+                    position: "insideBottom",
+                    offset: -10,
+                    fill: "#001a52",
+                    fontSize: 12,
+                  }}
+                />
+                <YAxis
+                  orientation="right"
+                  tickFormatter={compactMoney}
+                  tickLine={false}
+                  axisLine={false}
+                  width={58}
+                />
+                <Tooltip
+                  content={
+                    <ProjectionTooltip
+                      chartMode={chartMode}
+                      displayMode={displayMode}
+                    />
+                  }
+                />
+                <Legend
+                  verticalAlign="bottom"
+                  iconType="circle"
+                  wrapperStyle={{ paddingTop: 24 }}
+                />
+                {chartMode === BAR_CHART ? (
+                  <ReferenceLine y={0} stroke="#d7dcea" />
+                ) : null}
+                <ReferenceLine
+                  y={displayedFireTarget}
+                  stroke="#147a52"
+                  strokeDasharray="3 3"
+                  label={{
+                    value: `Goal: ${compactMoney(displayedFireTarget)}`,
+                    position: "insideTopLeft",
+                    fill: "#147a52",
+                  }}
+                />
+                <ReferenceLine
+                  x={plan.retirementAge}
+                  stroke="#d7d7df"
+                  label={{
+                    value: plan.fireReachable
+                      ? `Retire at ${plan.retirementAge}`
+                      : `Projected to ${plan.retirementAge}`,
+                    position: "top",
+                    fill: "#5130ee",
+                  }}
+                />
 
-              <Area
-                type="monotone"
-                dataKey="contributionShade"
-                name="Contributions"
-                stackId="portfolio"
-                stroke="#326fc9"
-                fill="#326fc9"
-                fillOpacity={0.32}
-                strokeWidth={2}
-                dot={false}
-              />
-              <Area
-                type="monotone"
-                dataKey="growthShade"
-                name="Growth"
-                stackId="portfolio"
-                stroke="#6b7f14"
-                fill="#6b7f14"
-                fillOpacity={0.24}
-                strokeWidth={2}
-                dot={false}
-              />
-              <Area
-                type="monotone"
-                dataKey="withdrawals"
-                name="Withdrawal"
-                stroke="#d85b2a"
-                fill="#d85b2a"
-                fillOpacity={0.18}
-                strokeWidth={2}
-                dot={false}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+                {chartMode === STANDARD_CHART ? (
+                  <>
+                    <Area
+                      type="monotone"
+                      dataKey="contributionShade"
+                      name="Contributions"
+                      stackId="portfolio"
+                      stroke="#326fc9"
+                      fill="#326fc9"
+                      fillOpacity={0.32}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="growthShade"
+                      name="Growth"
+                      stackId="portfolio"
+                      stroke="#6b7f14"
+                      fill="#6b7f14"
+                      fillOpacity={0.24}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="withdrawals"
+                      name="Withdrawal"
+                      stroke="#d85b2a"
+                      fill="#d85b2a"
+                      fillOpacity={0.18}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Bar
+                      dataKey="contributionShade"
+                      name="Contributions"
+                      stackId="assets"
+                      fill="#326fc9"
+                      radius={[10, 10, 0, 0]}
+                      maxBarSize={32}
+                    />
+                    <Bar
+                      dataKey="growthShade"
+                      name="Growth"
+                      stackId="assets"
+                      fill="#97a836"
+                      radius={[10, 10, 0, 0]}
+                      maxBarSize={32}
+                    />
+                    <Bar
+                      dataKey="withdrawalBar"
+                      name="Spending"
+                      fill="#d85b2a"
+                      radius={[0, 0, 10, 10]}
+                      maxBarSize={32}
+                    />
+                  </>
+                )}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         <div className="projection-summary">
