@@ -19,21 +19,27 @@ import {
   PiggyBank,
   SlidersHorizontal,
   TrendingUp,
-  WalletCards,
 } from "lucide-react";
 import "./App.css";
 
-const MAX_ACCUMULATION_YEARS = 80;
-const MAX_DRAWDOWN_YEARS = 45;
+const MAX_AGE = 120;
+const MAX_ACCUMULATION_YEARS = 120;
+const MAX_DRAWDOWN_YEARS = 120;
+const MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR = 1_000_000;
 const DISPLAY_TODAYS_DOLLARS = "Today's dollars";
 const DISPLAY_NOMINAL_DOLLARS = "Nominal dollars";
-const DISPLAY_MODES = [DISPLAY_TODAYS_DOLLARS, DISPLAY_NOMINAL_DOLLARS] as const;
+const DISPLAY_MODES = [
+  DISPLAY_TODAYS_DOLLARS,
+  DISPLAY_NOMINAL_DOLLARS,
+] as const;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
 
 type AssetKey = "stocks" | "bonds" | "cash";
 type DisplayMode = (typeof DISPLAY_MODES)[number];
-type ContributionStopMode = typeof STOP_CONTRIBUTING_AT_FIRE | typeof STOP_CONTRIBUTING_AT_AGE;
+type ContributionStopMode =
+  | typeof STOP_CONTRIBUTING_AT_FIRE
+  | typeof STOP_CONTRIBUTING_AT_AGE;
 
 type AssetInput = {
   key: AssetKey;
@@ -54,9 +60,17 @@ type ProjectionPoint = {
 };
 
 type Plan = {
+  calculatedField:
+    | "Years to Retirement"
+    | "Monthly Contributions"
+    | "Expected Annual Expenses";
+  fireReachable: boolean;
+  warning: string | null;
   todayFireTarget: number;
   futureFireTarget: number;
   annualSavings: number;
+  monthlyContribution: number;
+  annualSpending: number;
   retirementAge: number;
   yearsToRetirement: number;
   portfolioAtRetirement: number;
@@ -65,9 +79,22 @@ type Plan = {
   projection: ProjectionPoint[];
 };
 
+type AccumulationRecord = {
+  year: number;
+  endingBalance: number;
+  rollingContribution: number;
+};
+
 function numberFromInput(value: string, fallback = 0): number {
   const parsed = Number(value.replace(/[$,%\s,]/g, ""));
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function optionalNumberFromInput(value: string): number | null {
+  if (value.trim() === "") return null;
+
+  const parsed = Number(value.replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -83,7 +110,8 @@ function money(value: number, maximumFractionDigits = 0): string {
 }
 
 function compactMoney(value: number): string {
-  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}m`;
+  if (Math.abs(value) >= 1_000_000)
+    return `$${(value / 1_000_000).toFixed(1)}m`;
   if (Math.abs(value) >= 1_000) return `$${Math.round(value / 1_000)}k`;
   return money(value);
 }
@@ -92,14 +120,200 @@ function inflationFactor(inflationRate: number, year: number): number {
   return Math.pow(1 + Math.max(inflationRate, 0) / 100, year);
 }
 
-function displayAmount(value: number, displayMode: DisplayMode, inflationRate: number, year: number): number {
+function displayAmount(
+  value: number,
+  displayMode: DisplayMode,
+  inflationRate: number,
+  year: number,
+): number {
   if (displayMode === DISPLAY_NOMINAL_DOLLARS) return value;
   return value / inflationFactor(inflationRate, year);
 }
 
-function rebalanceAllocations(assets: AssetInput[], changedKey: AssetKey, nextAllocation: number): AssetInput[] {
+function growBalanceForOneYear(args: {
+  startingBalance: number;
+  monthlyContribution: number;
+  annualContribution: number;
+  annualReturnPct: number;
+}): number {
+  const annualReturnRate = args.annualReturnPct / 100;
+  const monthlyGrowthMultiplier = Math.pow(1 + annualReturnRate, 1 / 12);
+
+  let balance = args.startingBalance + args.annualContribution;
+
+  for (let month = 0; month < 12; month += 1) {
+    balance += args.monthlyContribution;
+    balance *= monthlyGrowthMultiplier;
+  }
+
+  return balance;
+}
+
+function projectAccumulationTimeline(args: {
+  initialBalance: number;
+  monthlyContribution: number;
+  annualContribution: number;
+  annualReturnPct: number;
+  years: number;
+  contributionYears?: number;
+}): AccumulationRecord[] {
+  const records: AccumulationRecord[] = [
+    {
+      year: 0,
+      endingBalance: args.initialBalance,
+      rollingContribution: 0,
+    },
+  ];
+
+  let balance = args.initialBalance;
+  let rollingContribution = 0;
+
+  for (let year = 1; year <= args.years; year += 1) {
+    const shouldContribute =
+      args.contributionYears === undefined || year <= args.contributionYears;
+    const monthlyContribution = shouldContribute ? args.monthlyContribution : 0;
+    const annualContribution = shouldContribute ? args.annualContribution : 0;
+    const totalContribution = annualContribution + monthlyContribution * 12;
+    rollingContribution += totalContribution;
+    balance = growBalanceForOneYear({
+      startingBalance: balance,
+      monthlyContribution,
+      annualContribution,
+      annualReturnPct: args.annualReturnPct,
+    });
+
+    records.push({ year, endingBalance: balance, rollingContribution });
+  }
+
+  return records;
+}
+
+function retirementTarget(
+  expectedAnnualExpenses: number,
+  withdrawalRatePct: number,
+): number {
+  return expectedAnnualExpenses / (withdrawalRatePct / 100);
+}
+
+function futureValue(
+  todayValue: number,
+  inflationRatePct: number,
+  year: number,
+): number {
+  return todayValue * inflationFactor(inflationRatePct, year);
+}
+
+function todayValue(
+  futureValueAmount: number,
+  inflationRatePct: number,
+  year: number,
+): number {
+  return futureValueAmount / inflationFactor(inflationRatePct, year);
+}
+
+function solveMonthlyContribution(args: {
+  yearsToRetirement: number;
+  expectedAnnualExpenses: number;
+  annualContribution: number;
+  initialBalance: number;
+  annualReturnPct: number;
+  inflationRatePct: number;
+  withdrawalRatePct: number;
+  contributionYears?: number;
+}): { monthlyContribution: number; timeline: AccumulationRecord[] } {
+  const todayTarget = retirementTarget(
+    args.expectedAnnualExpenses,
+    args.withdrawalRatePct,
+  );
+  const futureTarget = futureValue(
+    todayTarget,
+    args.inflationRatePct,
+    args.yearsToRetirement,
+  );
+
+  const timelineFor = (monthlyContribution: number) =>
+    projectAccumulationTimeline({
+      initialBalance: args.initialBalance,
+      monthlyContribution,
+      annualContribution: args.annualContribution,
+      annualReturnPct: args.annualReturnPct,
+      years: args.yearsToRetirement,
+      contributionYears: args.contributionYears,
+    });
+
+  const zeroTimeline = timelineFor(0);
+
+  if (zeroTimeline[zeroTimeline.length - 1].endingBalance >= futureTarget) {
+    return { monthlyContribution: 0, timeline: zeroTimeline };
+  }
+
+  let low = 0;
+  let high = Math.max(25, args.expectedAnnualExpenses / 12);
+
+  while (
+    timelineFor(high)[timelineFor(high).length - 1].endingBalance < futureTarget
+  ) {
+    high *= 2;
+
+    if (high > MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR) {
+      break;
+    }
+  }
+
+  for (let iteration = 0; iteration < 100; iteration += 1) {
+    const mid = (low + high) / 2;
+    const finalBalance = timelineFor(mid)[args.yearsToRetirement].endingBalance;
+
+    if (finalBalance >= futureTarget) {
+      high = mid;
+    } else {
+      low = mid;
+    }
+  }
+
+  return { monthlyContribution: high, timeline: timelineFor(high) };
+}
+
+function solveExpectedAnnualExpenses(args: {
+  yearsToRetirement: number;
+  monthlyContribution: number;
+  annualContribution: number;
+  initialBalance: number;
+  annualReturnPct: number;
+  inflationRatePct: number;
+  withdrawalRatePct: number;
+  contributionYears?: number;
+}): { expectedAnnualExpenses: number; timeline: AccumulationRecord[] } {
+  const timeline = projectAccumulationTimeline({
+    initialBalance: args.initialBalance,
+    monthlyContribution: args.monthlyContribution,
+    annualContribution: args.annualContribution,
+    annualReturnPct: args.annualReturnPct,
+    years: args.yearsToRetirement,
+    contributionYears: args.contributionYears,
+  });
+  const nominalPortfolio = timeline[timeline.length - 1].endingBalance;
+  const realPortfolio = todayValue(
+    nominalPortfolio,
+    args.inflationRatePct,
+    args.yearsToRetirement,
+  );
+
+  return {
+    expectedAnnualExpenses: realPortfolio * (args.withdrawalRatePct / 100),
+    timeline,
+  };
+}
+
+function rebalanceAllocations(
+  assets: AssetInput[],
+  changedKey: AssetKey,
+  nextAllocation: number,
+): AssetInput[] {
   const updated = assets.map((asset) =>
-    asset.key === changedKey ? { ...asset, allocation: clamp(Math.round(nextAllocation), 0, 100) } : { ...asset },
+    asset.key === changedKey
+      ? { ...asset, allocation: clamp(Math.round(nextAllocation), 0, 100) }
+      : { ...asset },
   );
   const reduceOrder: Record<AssetKey, AssetKey[]> = {
     stocks: ["cash", "bonds"],
@@ -136,99 +350,238 @@ function rebalanceAllocations(assets: AssetInput[], changedKey: AssetKey, nextAl
 function calculatePlan(args: {
   age: number;
   currentSavings: number;
-  monthlyContribution: number;
+  desiredFireAge: number | null;
+  monthlyContribution: number | null;
   contributionStopMode: ContributionStopMode;
   contributionStopAge: number;
-  annualSpending: number;
+  annualSpending: number | null;
   withdrawalRate: number;
   inflationRate: number;
   assets: AssetInput[];
 }): Plan {
-  const safeWithdrawalRate = Math.max(args.withdrawalRate, 0.1) / 100;
-  const annualSavings = Math.max(args.monthlyContribution, 0) * 12;
-  const todayFireTarget = Math.max(args.annualSpending, 0) / safeWithdrawalRate;
-  const totalAllocation = args.assets.reduce((total, asset) => total + asset.allocation, 0) || 100;
-  const effectiveReturn =
-    args.assets.reduce((total, asset) => total + (asset.allocation / totalAllocation) * asset.returnRate, 0) / 100;
-  const inflationRate = Math.max(args.inflationRate, 0) / 100;
+  const safeWithdrawalRatePct = Math.max(args.withdrawalRate, 0.1);
+  const annualContribution = 0;
+  const currentAge = clamp(args.age, 0, MAX_AGE);
+  const maxYearsByAge = Math.max(MAX_AGE - currentAge, 0);
+  const accumulationHorizon = Math.min(MAX_ACCUMULATION_YEARS, maxYearsByAge);
+  const desiredFireAge =
+    args.desiredFireAge === null
+      ? null
+      : clamp(Math.round(args.desiredFireAge), currentAge, MAX_AGE);
+  const desiredYearsToRetirement =
+    desiredFireAge === null ? null : desiredFireAge - currentAge;
+  const totalAllocation =
+    args.assets.reduce((total, asset) => total + asset.allocation, 0) || 100;
+  const effectiveReturnPct =
+    args.assets.reduce(
+      (total, asset) =>
+        total + (asset.allocation / totalAllocation) * asset.returnRate,
+      0,
+    ) / 100;
+  const effectiveReturn = effectiveReturnPct * 100;
+  const inflationRatePct = Math.max(args.inflationRate, 0);
+  const initialBalance = Math.max(args.currentSavings, 0);
+  const contributionYears =
+    args.contributionStopMode === STOP_CONTRIBUTING_AT_AGE
+      ? Math.max(
+          clamp(args.contributionStopAge, currentAge, MAX_AGE) - currentAge,
+          0,
+        )
+      : undefined;
+
+  let calculatedField: Plan["calculatedField"];
+  let monthlyContribution = Math.max(args.monthlyContribution ?? 0, 0);
+  let expectedAnnualExpenses = Math.max(args.annualSpending ?? 0, 0);
+  let accumulationTimeline: AccumulationRecord[];
+  let yearsToRetirement: number;
+  let fireReachable: boolean;
+
+  if (
+    args.monthlyContribution === null &&
+    args.annualSpending !== null &&
+    desiredYearsToRetirement !== null
+  ) {
+    calculatedField = "Monthly Contributions";
+    yearsToRetirement = desiredYearsToRetirement;
+    const solved = solveMonthlyContribution({
+      yearsToRetirement,
+      expectedAnnualExpenses,
+      annualContribution,
+      initialBalance,
+      annualReturnPct: effectiveReturn,
+      inflationRatePct,
+      withdrawalRatePct: safeWithdrawalRatePct,
+      contributionYears,
+    });
+    monthlyContribution = solved.monthlyContribution;
+    accumulationTimeline = solved.timeline;
+    const futureTarget = futureValue(
+      retirementTarget(expectedAnnualExpenses, safeWithdrawalRatePct),
+      inflationRatePct,
+      yearsToRetirement,
+    );
+    fireReachable =
+      accumulationTimeline[accumulationTimeline.length - 1].endingBalance >=
+      futureTarget;
+  } else if (
+    args.annualSpending === null &&
+    args.monthlyContribution !== null &&
+    desiredYearsToRetirement !== null
+  ) {
+    calculatedField = "Expected Annual Expenses";
+    yearsToRetirement = desiredYearsToRetirement;
+    const solved = solveExpectedAnnualExpenses({
+      yearsToRetirement,
+      monthlyContribution,
+      annualContribution,
+      initialBalance,
+      annualReturnPct: effectiveReturn,
+      inflationRatePct,
+      withdrawalRatePct: safeWithdrawalRatePct,
+      contributionYears,
+    });
+    expectedAnnualExpenses = solved.expectedAnnualExpenses;
+    accumulationTimeline = solved.timeline;
+    fireReachable = expectedAnnualExpenses > 0;
+  } else {
+    calculatedField = "Years to Retirement";
+    const todayFireTarget = retirementTarget(
+      expectedAnnualExpenses,
+      safeWithdrawalRatePct,
+    );
+    const fullTimeline = projectAccumulationTimeline({
+      initialBalance,
+      monthlyContribution,
+      annualContribution,
+      annualReturnPct: effectiveReturn,
+      years: accumulationHorizon,
+      contributionYears,
+    });
+
+    const reachedRecord = fullTimeline.find((record) => {
+      const futureTarget = futureValue(
+        todayFireTarget,
+        inflationRatePct,
+        record.year,
+      );
+      return record.endingBalance >= futureTarget;
+    });
+
+    if (reachedRecord) {
+      yearsToRetirement = reachedRecord.year;
+      fireReachable = true;
+      accumulationTimeline = fullTimeline.slice(0, yearsToRetirement + 1);
+    } else {
+      yearsToRetirement = accumulationHorizon;
+      fireReachable = false;
+      accumulationTimeline = fullTimeline;
+    }
+  }
+
+  const annualSavings = monthlyContribution * 12 + annualContribution;
+  const todayFireTarget = retirementTarget(
+    expectedAnnualExpenses,
+    safeWithdrawalRatePct,
+  );
+  const futureFireTarget = futureValue(
+    todayFireTarget,
+    inflationRatePct,
+    yearsToRetirement,
+  );
+  const portfolioAtRetirement =
+    accumulationTimeline[accumulationTimeline.length - 1]?.endingBalance ??
+    initialBalance;
 
   const projection: ProjectionPoint[] = [];
-  let portfolio = Math.max(args.currentSavings, 0);
-  let contributions = portfolio;
-  let retirementYear = 0;
-  const contributionStopAge = Math.max(args.contributionStopAge, args.age);
 
-  projection.push({
-    year: 0,
-    age: args.age,
-    phase: "Saving",
-    portfolio,
-    contributions,
-    growth: 0,
-    withdrawals: 0,
-    annualWithdrawal: 0,
-  });
-
-  while (portfolio < todayFireTarget * Math.pow(1 + inflationRate, retirementYear) && retirementYear < MAX_ACCUMULATION_YEARS) {
-    const shouldContribute =
-      args.contributionStopMode === STOP_CONTRIBUTING_AT_FIRE || args.age + retirementYear < contributionStopAge;
-    const annualContributionForYear = shouldContribute ? annualSavings : 0;
-
-    retirementYear += 1;
-    contributions += annualContributionForYear;
-    portfolio = (portfolio + annualContributionForYear) * (1 + effectiveReturn);
-
+  for (const record of accumulationTimeline) {
+    const contributions = initialBalance + record.rollingContribution;
     projection.push({
-      year: retirementYear,
-      age: args.age + retirementYear,
+      year: record.year,
+      age: currentAge + record.year,
       phase: "Saving",
-      portfolio,
+      portfolio: record.endingBalance,
       contributions,
-      growth: Math.max(portfolio - contributions, 0),
+      growth: Math.max(record.endingBalance - contributions, 0),
       withdrawals: 0,
       annualWithdrawal: 0,
     });
   }
 
-  const yearsToRetirement = retirementYear;
-  const portfolioAtRetirement = portfolio;
-  const futureFireTarget = todayFireTarget * Math.pow(1 + inflationRate, yearsToRetirement);
+  let portfolio = portfolioAtRetirement;
+  const contributions =
+    initialBalance +
+    (accumulationTimeline[accumulationTimeline.length - 1]
+      ?.rollingContribution ?? 0);
+  let contributionBucket = Math.min(contributions, portfolioAtRetirement);
+  let growthBucket = Math.max(portfolioAtRetirement - contributionBucket, 0);
   let cumulativeWithdrawals = 0;
   let yearsFunded = 0;
+  const maxDrawdownYears = fireReachable
+    ? Math.min(
+        MAX_DRAWDOWN_YEARS,
+        Math.max(MAX_AGE - (currentAge + yearsToRetirement), 0),
+      )
+    : 0;
 
-  for (let drawdownYear = 1; drawdownYear <= MAX_DRAWDOWN_YEARS; drawdownYear += 1) {
-    const absoluteYear = yearsToRetirement + drawdownYear;
-    const plannedWithdrawal = args.annualSpending * Math.pow(1 + inflationRate, drawdownYear - 1);
+  for (
+    let drawdownYear = 1;
+    drawdownYear <= maxDrawdownYears;
+    drawdownYear += 1
+  ) {
+    const absoluteYear = yearsToRetirement + drawdownYear - 1;
+    const plannedWithdrawal =
+      expectedAnnualExpenses * inflationFactor(inflationRatePct, absoluteYear);
     const actualWithdrawal = Math.min(portfolio, plannedWithdrawal);
+    const growthWithdrawal = Math.min(growthBucket, actualWithdrawal);
+    const contributionWithdrawal = actualWithdrawal - growthWithdrawal;
 
-    portfolio -= actualWithdrawal;
+    growthBucket -= growthWithdrawal;
+    contributionBucket = Math.max(
+      contributionBucket - contributionWithdrawal,
+      0,
+    );
+    portfolio = contributionBucket + growthBucket;
     cumulativeWithdrawals += actualWithdrawal;
-    portfolio *= 1 + effectiveReturn;
+    const balanceBeforeGrowth = portfolio;
+    portfolio *= 1 + effectiveReturnPct;
+    const investmentGrowth = portfolio - balanceBeforeGrowth;
+    growthBucket += investmentGrowth;
+    portfolio = contributionBucket + growthBucket;
     yearsFunded = drawdownYear;
 
     projection.push({
-      year: absoluteYear,
-      age: args.age + absoluteYear,
+      year: absoluteYear + 1,
+      age: currentAge + absoluteYear + 1,
       phase: "Retired",
       portfolio,
-      contributions,
-      growth: Math.max(portfolio + cumulativeWithdrawals - contributions, 0),
+      contributions: contributionBucket,
+      growth: growthBucket,
       withdrawals: cumulativeWithdrawals,
       annualWithdrawal: actualWithdrawal,
     });
 
-    if (actualWithdrawal < plannedWithdrawal || portfolio <= 1) break;
+    if (actualWithdrawal < plannedWithdrawal || portfolio <= 0) break;
   }
 
+  const warning = fireReachable
+    ? null
+    : "With these current inputs, FIRE will not be reached.";
+
   return {
+    calculatedField,
+    fireReachable,
+    warning,
     todayFireTarget,
     futureFireTarget,
     annualSavings,
-    retirementAge: args.age + yearsToRetirement,
+    monthlyContribution,
+    annualSpending: expectedAnnualExpenses,
+    retirementAge: currentAge + yearsToRetirement,
     yearsToRetirement,
     portfolioAtRetirement,
     yearsFunded,
-    effectiveReturn: effectiveReturn * 100,
+    effectiveReturn,
     projection,
   };
 }
@@ -253,15 +606,26 @@ function Field(props: {
         ) : null}
       </span>
       <span className="field-control">
-        {props.prefix ? <span className="field-affix">{props.prefix}</span> : null}
-        <input value={props.value} onChange={(event) => props.onChange(event.target.value)} inputMode="decimal" />
-        {props.suffix ? <span className="field-affix">{props.suffix}</span> : null}
+        {props.prefix ? (
+          <span className="field-affix">{props.prefix}</span>
+        ) : null}
+        <input
+          value={props.value}
+          onChange={(event) => props.onChange(event.target.value)}
+          inputMode="decimal"
+        />
+        {props.suffix ? (
+          <span className="field-affix">{props.suffix}</span>
+        ) : null}
       </span>
     </label>
   );
 }
 
-function SegmentedControl(props: { value: DisplayMode; onChange: (value: DisplayMode) => void }) {
+function SegmentedControl(props: {
+  value: DisplayMode;
+  onChange: (value: DisplayMode) => void;
+}) {
   return (
     <div className="segmented-control" aria-label="Dollar display mode">
       {DISPLAY_MODES.map((mode) => (
@@ -278,8 +642,14 @@ function SegmentedControl(props: { value: DisplayMode; onChange: (value: Display
   );
 }
 
-function ContributionStopToggle(props: { value: ContributionStopMode; onChange: (value: ContributionStopMode) => void }) {
-  const options: ContributionStopMode[] = [STOP_CONTRIBUTING_AT_FIRE, STOP_CONTRIBUTING_AT_AGE];
+function ContributionStopToggle(props: {
+  value: ContributionStopMode;
+  onChange: (value: ContributionStopMode) => void;
+}) {
+  const options: ContributionStopMode[] = [
+    STOP_CONTRIBUTING_AT_FIRE,
+    STOP_CONTRIBUTING_AT_AGE,
+  ];
 
   return (
     <div className="segmented-control" aria-label="Contribution stop mode">
@@ -297,7 +667,11 @@ function ContributionStopToggle(props: { value: ContributionStopMode; onChange: 
   );
 }
 
-function Panel(props: { eyebrow: string; title: string; children: React.ReactNode }) {
+function Panel(props: {
+  eyebrow: string;
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <section className="panel">
       <p className="eyebrow">{props.eyebrow}</p>
@@ -336,7 +710,9 @@ function AssetRow(props: {
           min="0"
           max="100"
           value={props.asset.allocation}
-          onChange={(event) => props.onAllocationChange(Number(event.target.value))}
+          onChange={(event) =>
+            props.onAllocationChange(Number(event.target.value))
+          }
         />
       </label>
 
@@ -344,7 +720,11 @@ function AssetRow(props: {
         <span>Growth rate</span>
         <input
           value={props.asset.returnRate}
-          onChange={(event) => props.onReturnChange(numberFromInput(event.target.value, props.asset.returnRate))}
+          onChange={(event) =>
+            props.onReturnChange(
+              numberFromInput(event.target.value, props.asset.returnRate),
+            )
+          }
           inputMode="decimal"
         />
         <span>%</span>
@@ -360,12 +740,17 @@ type TooltipEntry = {
   name?: string;
 };
 
-function ProjectionTooltip(props: { active?: boolean; payload?: TooltipEntry[] }) {
+function ProjectionTooltip(props: {
+  active?: boolean;
+  payload?: TooltipEntry[];
+}) {
   if (!props.active || !props.payload?.length) return null;
 
   const point = props.payload[0]?.payload as ProjectionPoint;
   const values = props.payload.filter((entry) =>
-    ["portfolio", "contributionShade", "growthShade", "withdrawals"].includes(entry.dataKey),
+    ["portfolio", "contributionShade", "growthShade", "withdrawals"].includes(
+      entry.dataKey,
+    ),
   );
 
   return (
@@ -394,9 +779,12 @@ export default function App() {
   const [currentSavings, setCurrentSavings] = useState("936");
   const [monthlyContribution, setMonthlyContribution] = useState("411"); // 3618, 4118, 4618
   const [annualSpending, setAnnualSpending] = useState("70000");
-  const [withdrawalRate, setWithdrawalRate] = useState("10");
+  const [withdrawalRate, setWithdrawalRate] = useState("3.5");
   const [inflationRate, setInflationRate] = useState("3");
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(DISPLAY_TODAYS_DOLLARS);
+  const [desiredFireAge, setDesiredFireAge] = useState("");
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(
+    DISPLAY_TODAYS_DOLLARS,
+  );
   const [contributionStopMode, setContributionStopMode] =
     useState<ContributionStopMode>(STOP_CONTRIBUTING_AT_FIRE);
   const [contributionStopAge, setContributionStopAge] = useState("60");
@@ -409,12 +797,19 @@ export default function App() {
   const plan = useMemo(
     () =>
       calculatePlan({
-        age: clamp(Math.round(numberFromInput(age, 30)), 0, 100),
+        age: clamp(Math.round(numberFromInput(age, 30)), 0, MAX_AGE),
         currentSavings: numberFromInput(currentSavings),
-        monthlyContribution: numberFromInput(monthlyContribution),
+        desiredFireAge: optionalNumberFromInput(desiredFireAge),
+        monthlyContribution: optionalNumberFromInput(monthlyContribution),
         contributionStopMode,
-        contributionStopAge: clamp(Math.round(numberFromInput(contributionStopAge, numberFromInput(age, 30))), 0, 120),
-        annualSpending: numberFromInput(annualSpending),
+        contributionStopAge: clamp(
+          Math.round(
+            numberFromInput(contributionStopAge, numberFromInput(age, 30)),
+          ),
+          0,
+          120,
+        ),
+        annualSpending: optionalNumberFromInput(annualSpending),
         withdrawalRate: numberFromInput(withdrawalRate, 4),
         inflationRate: numberFromInput(inflationRate, 3),
         assets,
@@ -423,6 +818,7 @@ export default function App() {
       age,
       currentSavings,
       monthlyContribution,
+      desiredFireAge,
       contributionStopMode,
       contributionStopAge,
       annualSpending,
@@ -432,25 +828,58 @@ export default function App() {
     ],
   );
 
-  const chartData = useMemo(
-    () =>
-      {
-        const inflation = numberFromInput(inflationRate, 3);
-        return plan.projection.map((point) => ({
-          ...point,
-          portfolio: displayAmount(point.portfolio, displayMode, inflation, point.year),
-          contributionShade: displayAmount(Math.min(point.contributions, point.portfolio), displayMode, inflation, point.year),
-          growthShade: displayAmount(Math.max(point.portfolio - Math.min(point.contributions, point.portfolio), 0), displayMode, inflation, point.year),
-          withdrawals: displayAmount(point.withdrawals, displayMode, inflation, point.year),
-          annualWithdrawal: displayAmount(point.annualWithdrawal, displayMode, inflation, point.year),
-          fireTarget: displayAmount(plan.futureFireTarget, displayMode, inflation, plan.yearsToRetirement),
-          retirementLine: point.year === plan.yearsToRetirement ? point.portfolio : null,
-        }));
-      },
-    [displayMode, inflationRate, plan],
-  );
+  const chartData = useMemo(() => {
+    const inflation = numberFromInput(inflationRate, 3);
+    return plan.projection.map((point) => ({
+      ...point,
+      portfolio: displayAmount(
+        point.portfolio,
+        displayMode,
+        inflation,
+        point.year,
+      ),
+      contributionShade: displayAmount(
+        Math.min(point.contributions, point.portfolio),
+        displayMode,
+        inflation,
+        point.year,
+      ),
+      growthShade: displayAmount(
+        Math.max(
+          point.portfolio - Math.min(point.contributions, point.portfolio),
+          0,
+        ),
+        displayMode,
+        inflation,
+        point.year,
+      ),
+      withdrawals: displayAmount(
+        point.withdrawals,
+        displayMode,
+        inflation,
+        point.year,
+      ),
+      annualWithdrawal: displayAmount(
+        point.annualWithdrawal,
+        displayMode,
+        inflation,
+        point.year,
+      ),
+      fireTarget: displayAmount(
+        plan.futureFireTarget,
+        displayMode,
+        inflation,
+        plan.yearsToRetirement,
+      ),
+      retirementLine:
+        point.year === plan.yearsToRetirement ? point.portfolio : null,
+    }));
+  }, [displayMode, inflationRate, plan]);
 
-  const totalAllocation = assets.reduce((total, asset) => total + asset.allocation, 0);
+  const totalAllocation = assets.reduce(
+    (total, asset) => total + asset.allocation,
+    0,
+  );
   const inflationRateNumber = numberFromInput(inflationRate, 3);
   const displayedFireTarget = displayAmount(
     plan.futureFireTarget,
@@ -464,9 +893,19 @@ export default function App() {
     inflationRateNumber,
     plan.yearsToRetirement,
   );
+  const calculatedValue =
+    plan.calculatedField === "Monthly Contributions"
+      ? money(plan.monthlyContribution, 2)
+      : plan.calculatedField === "Expected Annual Expenses"
+        ? money(plan.annualSpending, 2)
+        : `${plan.fireReachable ? plan.yearsToRetirement : `>${plan.yearsToRetirement}`} years`;
 
   function updateAsset(key: AssetKey, changes: Partial<AssetInput>) {
-    setAssets((current) => current.map((asset) => (asset.key === key ? { ...asset, ...changes } : asset)));
+    setAssets((current) =>
+      current.map((asset) =>
+        asset.key === key ? { ...asset, ...changes } : asset,
+      ),
+    );
   }
 
   function updateAllocation(key: AssetKey, allocation: number) {
@@ -479,11 +918,10 @@ export default function App() {
         <div>
           <span className="brand-mark">
             <Calculator size={18} />
-            FIRE Planner
+            Financial Independence, Retire Early (FIRE)
           </span>
-          <h1>Early retirement calculator</h1>
+          <h1>Retirement Calculator</h1>
         </div>
-        <div className="currency-pill">US Dollar</div>
       </header>
 
       <section className="calculator-grid" aria-label="Calculator inputs">
@@ -495,20 +933,30 @@ export default function App() {
               value={currentSavings}
               onChange={setCurrentSavings}
               prefix="$"
-              help="Included inside the contributions line on the graph, instead of being displayed as a separate initial lump sum."
             />
             <Field
               label="Saving monthly"
               value={monthlyContribution}
               onChange={setMonthlyContribution}
               prefix="$"
-              help="Assumption: each monthly contribution is invested at the start of the month, so it gets a full month of market return."
+              help="Leave this blank to calculate the monthly savings needed for your desired FIRE age. Assumption: each monthly contribution is invested at the start of the month."
             />
           </Panel>
 
           <Panel eyebrow="Later" title="Your retirement">
-            <Field label="Annual spending" value={annualSpending} onChange={setAnnualSpending} prefix="$" />
-            <Field label="Withdrawal rate" value={withdrawalRate} onChange={setWithdrawalRate} suffix="%" />
+            <Field
+              label="Annual spending"
+              value={annualSpending}
+              onChange={setAnnualSpending}
+              prefix="$"
+              help="Leave this blank to calculate the annual spending level supported by your savings and desired FIRE age."
+            />
+            <Field
+              label="Withdrawal rate"
+              value={withdrawalRate}
+              onChange={setWithdrawalRate}
+              suffix="%"
+            />
             <Field
               label="Inflation"
               value={inflationRate}
@@ -516,21 +964,53 @@ export default function App() {
               suffix="%"
               help="Used to inflate your future FIRE target and retirement withdrawals. Today's dollars reverses this inflation for display."
             />
-            <div className="display-mode-row">
-              <span>Contribute until</span>
-              <ContributionStopToggle value={contributionStopMode} onChange={setContributionStopMode} />
-            </div>
-            {contributionStopMode === STOP_CONTRIBUTING_AT_AGE ? (
-              <Field
-                label="Stop age"
-                value={contributionStopAge}
-                onChange={setContributionStopAge}
-              />
-            ) : null}
-            <div className="display-mode-row">
-              <span>Display</span>
-              <SegmentedControl value={displayMode} onChange={setDisplayMode} />
-            </div>
+            <details className="advanced-investments advanced-settings">
+              <summary>
+                <SlidersHorizontal size={17} />
+                Advanced Settings
+              </summary>
+
+              <div className="advanced-settings-body">
+                <Field
+                  label="Desired FIRE age"
+                  value={desiredFireAge}
+                  onChange={setDesiredFireAge}
+                  help="Used when monthly savings or annual spending is left blank."
+                />
+                <div className="display-mode-row">
+                  <span>Contribute until</span>
+                  <ContributionStopToggle
+                    value={contributionStopMode}
+                    onChange={setContributionStopMode}
+                  />
+                </div>
+                {contributionStopMode === STOP_CONTRIBUTING_AT_AGE ? (
+                  <Field
+                    label="Stop age"
+                    value={contributionStopAge}
+                    onChange={setContributionStopAge}
+                  />
+                ) : null}
+                <div className="display-mode-row">
+                  <span className="row-label-with-help">
+                    Display
+                    <span className="help">
+                      <HelpCircle size={15} />
+                      <span className="help-text">
+                        Today's dollars adjust future values for inflation so
+                        they are shown in current purchasing power. Nominal
+                        dollars show the actual future dollar amounts without
+                        adjusting for inflation.
+                      </span>
+                    </span>
+                  </span>
+                  <SegmentedControl
+                    value={displayMode}
+                    onChange={setDisplayMode}
+                  />
+                </div>
+              </div>
+            </details>
           </Panel>
         </div>
 
@@ -542,8 +1022,12 @@ export default function App() {
                 <AssetRow
                   key={asset.key}
                   asset={asset}
-                  onAllocationChange={(allocation) => updateAllocation(asset.key, allocation)}
-                  onReturnChange={(returnRate) => updateAsset(asset.key, { returnRate })}
+                  onAllocationChange={(allocation) =>
+                    updateAllocation(asset.key, allocation)
+                  }
+                  onReturnChange={(returnRate) =>
+                    updateAsset(asset.key, { returnRate })
+                  }
                 />
               ))}
           </div>
@@ -560,27 +1044,67 @@ export default function App() {
                   <AssetRow
                     key={asset.key}
                     asset={asset}
-                    onAllocationChange={(allocation) => updateAllocation(asset.key, allocation)}
-                    onReturnChange={(returnRate) => updateAsset(asset.key, { returnRate })}
+                    onAllocationChange={(allocation) =>
+                      updateAllocation(asset.key, allocation)
+                    }
+                    onReturnChange={(returnRate) =>
+                      updateAsset(asset.key, { returnRate })
+                    }
                   />
                 ))}
             </div>
           </details>
-          <div className={totalAllocation === 100 ? "return-note" : "return-note warning"}>
-            <strong>Effective overall rate of return: {plan.effectiveReturn.toFixed(2)}%</strong>
+          <div
+            className={
+              totalAllocation === 100 ? "return-note" : "return-note warning"
+            }
+          >
+            <strong>
+              Effective overall rate of return:{" "}
+              {plan.effectiveReturn.toFixed(2)}%
+            </strong>
             <span>
-              Allocation total: {totalAllocation}%. This must equal 100%, so changing one allocation automatically
-              rebalances the others.
+              Allocation total: {totalAllocation}%. This must equal 100%, so
+              changing one allocation automatically rebalances the others.
             </span>
           </div>
         </Panel>
       </section>
 
       <section className="results-band" aria-label="Calculator results">
-        <Stat label={`Your FIRE target (${displayMode})`} value={money(displayedFireTarget, 2)} icon={<WalletCards size={22} />} />
-        <Stat label="Retirement age" value={String(plan.retirementAge)} icon={<TrendingUp size={24} />} />
-        <Stat label="Annual savings" value={money(plan.annualSavings, 2)} icon={<PiggyBank size={22} />} />
+        <Stat
+          label={`Your FIRE target (${displayMode})`}
+          value={money(displayedFireTarget, 2)}
+          icon={<DollarSign size={22} />}
+        />
+        <Stat
+          label={
+            plan.fireReachable ? "Retirement age" : "Projected through age"
+          }
+          value={String(plan.retirementAge)}
+          icon={<TrendingUp size={24} />}
+        />
+        <Stat
+          label="Annual savings"
+          value={money(plan.annualSavings, 2)}
+          icon={<PiggyBank size={22} />}
+        />
+        <Stat
+          label={`Calculated ${plan.calculatedField}`}
+          value={calculatedValue}
+          icon={<Calculator size={22} />}
+        />
       </section>
+
+      {plan.warning ? (
+        <section className="warning-banner" role="alert">
+          <strong>{plan.warning}</strong>
+          <span>
+            The graph still projects the current path through age {MAX_AGE};
+            adjust savings, spending, returns, or timing to make FIRE reachable.
+          </span>
+        </section>
+      ) : null}
 
       <section className="projection-card">
         <p className="eyebrow">The journey ahead</p>
@@ -588,29 +1112,57 @@ export default function App() {
 
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 28, right: 22, bottom: 22, left: 8 }}>
+            <ComposedChart
+              data={chartData}
+              margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
+            >
               <CartesianGrid stroke="#edf0fb" vertical={false} />
               <XAxis
-                dataKey="year"
-                tickFormatter={(year) => `Y${year}`}
+                dataKey="age"
                 tickLine={false}
                 axisLine={false}
                 minTickGap={28}
-                label={{ value: "Years from today", position: "insideBottom", offset: -10, fill: "#001a52", fontSize: 12 }}
+                label={{
+                  value: "Age",
+                  position: "insideBottom",
+                  offset: -10,
+                  fill: "#001a52",
+                  fontSize: 12,
+                }}
               />
-              <YAxis orientation="right" tickFormatter={compactMoney} tickLine={false} axisLine={false} width={58} />
+              <YAxis
+                orientation="right"
+                tickFormatter={compactMoney}
+                tickLine={false}
+                axisLine={false}
+                width={58}
+              />
               <Tooltip content={<ProjectionTooltip />} />
-              <Legend verticalAlign="bottom" iconType="circle" wrapperStyle={{ paddingTop: 24 }} />
+              <Legend
+                verticalAlign="bottom"
+                iconType="circle"
+                wrapperStyle={{ paddingTop: 24 }}
+              />
               <ReferenceLine
                 y={displayedFireTarget}
                 stroke="#147a52"
                 strokeDasharray="3 3"
-                label={{ value: `Goal: ${compactMoney(displayedFireTarget)}`, position: "insideTopLeft", fill: "#147a52" }}
+                label={{
+                  value: `Goal: ${compactMoney(displayedFireTarget)}`,
+                  position: "insideTopLeft",
+                  fill: "#147a52",
+                }}
               />
               <ReferenceLine
-                x={plan.yearsToRetirement}
+                x={plan.retirementAge}
                 stroke="#d7d7df"
-                label={{ value: `Retire at ${plan.retirementAge}`, position: "top", fill: "#5130ee" }}
+                label={{
+                  value: plan.fireReachable
+                    ? `Retire at ${plan.retirementAge}`
+                    : `Projected to ${plan.retirementAge}`,
+                  position: "top",
+                  fill: "#5130ee",
+                }}
               />
 
               <Area
@@ -645,7 +1197,6 @@ export default function App() {
                 strokeWidth={2}
                 dot={false}
               />
-
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -653,15 +1204,26 @@ export default function App() {
         <div className="projection-summary">
           <div>
             <BarChart3 size={18} />
-            <span>{plan.yearsToRetirement} years until target</span>
+            <span>
+              {plan.fireReachable
+                ? `${plan.yearsToRetirement} years until target`
+                : `Not reached by age ${MAX_AGE}`}
+            </span>
           </div>
           <div>
             <DollarSign size={18} />
-            <span>{money(displayedPortfolioAtRetirement)} projected at retirement</span>
+            <span>
+              {money(displayedPortfolioAtRetirement)} projected at retirement
+            </span>
           </div>
           <div>
             <Percent size={18} />
-            <span>{plan.yearsFunded >= MAX_DRAWDOWN_YEARS ? `${MAX_DRAWDOWN_YEARS}+` : plan.yearsFunded} drawdown years shown</span>
+            <span>
+              {plan.yearsFunded >= MAX_DRAWDOWN_YEARS
+                ? `${MAX_DRAWDOWN_YEARS}+`
+                : plan.yearsFunded}{" "}
+              drawdown years shown
+            </span>
           </div>
         </div>
       </section>
