@@ -884,7 +884,9 @@ class RetirementCalculatorGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Early Retirement Calculator")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
 
         self.inputs = {}
 
@@ -900,7 +902,8 @@ class RetirementCalculatorGUI:
         ]
 
         frame = ttk.Frame(root, padding=16)
-        frame.grid(row=0, column=0)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.grid_columnconfigure(1, weight=1)
 
         instructions = (
             "Enter exactly 2 of the first 3 fields and leave 1 blank.\n"
@@ -1029,7 +1032,8 @@ class RetirementCalculatorGUI:
             wrap="none",
             font=("Courier", 10),
         )
-        self.result.grid(row=button_row + 1, column=0, columnspan=2)
+        frame.grid_rowconfigure(button_row + 1, weight=1)
+        self.result.grid(row=button_row + 1, column=0, columnspan=2, sticky="nsew")
 
     def get_required_float(self, label: str) -> float:
         value = self.inputs[label].get().replace(",", "").strip()
