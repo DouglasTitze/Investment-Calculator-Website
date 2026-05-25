@@ -841,6 +841,45 @@ def format_drawdown_timeline(
 # Simple GUI
 # ----------------------------
 
+
+class ToolTip:
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _event=None):
+        if self.tip_window or not self.text:
+            return
+
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + 20
+
+        self.tip_window = tk.Toplevel(self.widget)
+        self.tip_window.wm_overrideredirect(True)
+        self.tip_window.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(
+            self.tip_window,
+            text=self.text,
+            justify="left",
+            background="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=6,
+        )
+        label.pack()
+
+    def hide(self, _event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 class RetirementCalculatorGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -852,8 +891,8 @@ class RetirementCalculatorGUI:
         fields = [
             (YEARS_TO_RETIREMENT_LABEL, ""),
             (EXPECTED_ANNUAL_EXPENSES_LABEL, "70000"),
-            (MONTHLY_CONTRIBUTION_LABEL, "2368"),  # 2368, 2868, 3368
             (ANNUAL_CONTRIBUTION_LABEL, "1500"),
+            (MONTHLY_CONTRIBUTION_LABEL, "2368"),  # 2368, 2868, 3368
             (CURRENT_PORTFOLIO_LABEL, "936"),
             (ANNUAL_RETURN_LABEL, "10"),
             (INFLATION_RATE_LABEL, "3"),
@@ -897,12 +936,25 @@ class RetirementCalculatorGUI:
 
             row_offset += 1
 
-            ttk.Label(frame, text=label).grid(
-                row=row_offset,
-                column=0,
-                sticky="w",
-                pady=4,
-            )
+            label_frame = ttk.Frame(frame)
+            label_frame.grid(row=row_offset, column=0, sticky="w", pady=4)
+
+            ttk.Label(label_frame, text=label).pack(side="left")
+
+            if label in (MONTHLY_CONTRIBUTION_LABEL, ANNUAL_CONTRIBUTION_LABEL):
+                help_label = tk.Label(
+                    label_frame,
+                    text=" ?",
+                    cursor="hand2",
+                    fg="blue",
+                )
+                help_label.pack(side="left")
+
+                label_text = "Assumption: Annual contributions are invested at the start of each year."
+                if label == MONTHLY_CONTRIBUTION_LABEL:
+                    label_text = "Assumption: Monthly contributions are invested at the start of each month."
+
+                ToolTip(help_label, label_text)
 
             entry = ttk.Entry(frame, width=28)
             entry.insert(0, default)
