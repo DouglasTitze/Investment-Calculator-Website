@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   Bar,
@@ -16,16 +16,18 @@ import {
   Calculator,
   DollarSign,
   HelpCircle,
-  Percent,
+  PanelLeftClose,
+  PanelLeftOpen,
   PiggyBank,
   SlidersHorizontal,
   TrendingUp,
 } from "lucide-react";
 import "./App.css";
 
-const MAX_AGE = 120;
-const MAX_ACCUMULATION_YEARS = 120;
-const MAX_DRAWDOWN_YEARS = 120;
+const DEFAULT_FINAL_CHART_AGE = 120;
+const MAX_SUPPORTED_AGE = 150;
+const MAX_ACCUMULATION_YEARS = MAX_SUPPORTED_AGE;
+const MAX_DRAWDOWN_YEARS = MAX_SUPPORTED_AGE;
 const MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR = 1_000_000;
 const DISPLAY_TODAYS_DOLLARS = "Today's dollars";
 const DISPLAY_NOMINAL_DOLLARS = "Nominal dollars";
@@ -82,6 +84,7 @@ type Plan = {
   yearsToRetirement: number;
   portfolioAtRetirement: number;
   yearsFunded: number;
+  finalChartAge: number;
   effectiveReturn: number;
   projection: ProjectionPoint[];
 };
@@ -364,17 +367,23 @@ function calculatePlan(args: {
   annualSpending: number | null;
   withdrawalRate: number;
   inflationRate: number;
+  finalChartAge: number;
   assets: AssetInput[];
 }): Plan {
   const safeWithdrawalRatePct = Math.max(args.withdrawalRate, 0.1);
   const annualContribution = 0;
-  const currentAge = clamp(args.age, 0, MAX_AGE);
-  const maxYearsByAge = Math.max(MAX_AGE - currentAge, 0);
+  const currentAge = clamp(args.age, 0, MAX_SUPPORTED_AGE);
+  const finalChartAge = clamp(
+    Math.round(args.finalChartAge),
+    currentAge,
+    MAX_SUPPORTED_AGE,
+  );
+  const maxYearsByAge = Math.max(finalChartAge - currentAge, 0);
   const accumulationHorizon = Math.min(MAX_ACCUMULATION_YEARS, maxYearsByAge);
   const desiredFireAge =
     args.desiredFireAge === null
       ? null
-      : clamp(Math.round(args.desiredFireAge), currentAge, MAX_AGE);
+      : clamp(Math.round(args.desiredFireAge), currentAge, finalChartAge);
   const desiredYearsToRetirement =
     desiredFireAge === null ? null : desiredFireAge - currentAge;
   const totalAllocation =
@@ -391,7 +400,8 @@ function calculatePlan(args: {
   const contributionYears =
     args.contributionStopMode === STOP_CONTRIBUTING_AT_AGE
       ? Math.max(
-          clamp(args.contributionStopAge, currentAge, MAX_AGE) - currentAge,
+          clamp(args.contributionStopAge, currentAge, finalChartAge) -
+            currentAge,
           0,
         )
       : undefined;
@@ -530,7 +540,7 @@ function calculatePlan(args: {
   const maxDrawdownYears = fireReachable
     ? Math.min(
         MAX_DRAWDOWN_YEARS,
-        Math.max(MAX_AGE - (currentAge + yearsToRetirement), 0),
+        Math.max(finalChartAge - (currentAge + yearsToRetirement), 0),
       )
     : 0;
 
@@ -598,6 +608,7 @@ function calculatePlan(args: {
     yearsToRetirement,
     portfolioAtRetirement,
     yearsFunded,
+    finalChartAge,
     effectiveReturn,
     projection,
   };
@@ -627,6 +638,7 @@ function Field(props: {
           <span className="field-affix">{props.prefix}</span>
         ) : null}
         <input
+          aria-label={props.label}
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
           inputMode="decimal"
@@ -855,6 +867,13 @@ export default function App() {
     DISPLAY_TODAYS_DOLLARS,
   );
   const [chartMode, setChartMode] = useState<ChartMode>(STANDARD_CHART);
+  const [controlsOpen, setControlsOpen] = useState(true);
+  const [controlsPanelHeight, setControlsPanelHeight] = useState<number | null>(
+    null,
+  );
+  const [finalChartAge, setFinalChartAge] = useState(
+    String(DEFAULT_FINAL_CHART_AGE),
+  );
   const [contributionStopMode, setContributionStopMode] =
     useState<ContributionStopMode>(STOP_CONTRIBUTING_AT_FIRE);
   const [contributionStopAge, setContributionStopAge] = useState("60");
@@ -867,7 +886,7 @@ export default function App() {
   const plan = useMemo(
     () =>
       calculatePlan({
-        age: clamp(Math.round(numberFromInput(age, 30)), 0, MAX_AGE),
+        age: clamp(Math.round(numberFromInput(age, 30)), 0, MAX_SUPPORTED_AGE),
         currentSavings: numberFromInput(currentSavings),
         desiredFireAge: optionalNumberFromInput(desiredFireAge),
         monthlyContribution: optionalNumberFromInput(monthlyContribution),
@@ -877,11 +896,12 @@ export default function App() {
             numberFromInput(contributionStopAge, numberFromInput(age, 30)),
           ),
           0,
-          120,
+          MAX_SUPPORTED_AGE,
         ),
         annualSpending: optionalNumberFromInput(annualSpending),
         withdrawalRate: numberFromInput(withdrawalRate, 4),
         inflationRate: numberFromInput(inflationRate, 3),
+        finalChartAge: numberFromInput(finalChartAge, DEFAULT_FINAL_CHART_AGE),
         assets,
       }),
     [
@@ -894,6 +914,7 @@ export default function App() {
       annualSpending,
       withdrawalRate,
       inflationRate,
+      finalChartAge,
       assets,
     ],
   );
@@ -934,8 +955,8 @@ export default function App() {
             ),
       withdrawalBar:
         displayMode === DISPLAY_TODAYS_DOLLARS
-          ? -point.realWithdrawals
-          : -displayAmount(
+          ? point.realWithdrawals
+          : displayAmount(
               point.withdrawals,
               displayMode,
               inflation,
@@ -969,18 +990,43 @@ export default function App() {
     inflationRateNumber,
     plan.yearsToRetirement,
   );
-  const displayedPortfolioAtRetirement = displayAmount(
-    plan.portfolioAtRetirement,
-    displayMode,
-    inflationRateNumber,
-    plan.yearsToRetirement,
-  );
   const calculatedValue =
     plan.calculatedField === "Monthly Contributions"
       ? money(plan.monthlyContribution, 2)
       : plan.calculatedField === "Expected Annual Expenses"
         ? money(plan.annualSpending, 2)
         : `${plan.fireReachable ? plan.yearsToRetirement : `>${plan.yearsToRetirement}`} years`;
+
+  const calculatorLayoutRef = useRef<HTMLDivElement>(null);
+  const projectionCardRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const calculatorLayout = calculatorLayoutRef.current;
+    const projectionCard = projectionCardRef.current;
+    if (
+      !calculatorLayout ||
+      !projectionCard ||
+      typeof ResizeObserver === "undefined"
+    )
+      return;
+
+    const updateControlsPanelHeight = () => {
+      const layoutTop = calculatorLayout.getBoundingClientRect().top;
+      const projectionBottom = projectionCard.getBoundingClientRect().bottom;
+      setControlsPanelHeight(projectionBottom - layoutTop);
+    };
+    const observer = new ResizeObserver(updateControlsPanelHeight);
+
+    updateControlsPanelHeight();
+    observer.observe(calculatorLayout);
+    observer.observe(projectionCard);
+    window.addEventListener("resize", updateControlsPanelHeight);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateControlsPanelHeight);
+    };
+  }, [chartMode, chartData.length, plan.warning]);
 
   function updateAsset(key: AssetKey, changes: Partial<AssetInput>) {
     setAssets((current) =>
@@ -1006,366 +1052,382 @@ export default function App() {
         </div>
       </header>
 
-      <section className="calculator-grid" aria-label="Calculator inputs">
-        <div className="left-stack">
-          <Panel eyebrow="Today" title="Your situation">
-            <Field label="Age" value={age} onChange={setAge} />
-            <Field
-              label="Current savings"
-              value={currentSavings}
-              onChange={setCurrentSavings}
-              prefix="$"
-            />
-            <Field
-              label="Saving monthly"
-              value={monthlyContribution}
-              onChange={setMonthlyContribution}
-              prefix="$"
-              help="Leave this blank to calculate the monthly savings needed for your desired FIRE age. Assumption: each monthly contribution is invested at the start of the month."
-            />
-          </Panel>
+      <div
+        ref={calculatorLayoutRef}
+        className={
+          controlsOpen ? "calculator-layout" : "calculator-layout is-collapsed"
+        }
+        style={
+          controlsPanelHeight
+            ? ({
+                "--controls-panel-height": `${controlsPanelHeight}px`,
+              } as React.CSSProperties)
+            : undefined
+        }
+      >
+        <aside className="controls-sidebar" aria-label="Calculator controls">
+          <button
+            type="button"
+            className="controls-toggle"
+            aria-expanded={controlsOpen}
+            onClick={() => setControlsOpen((isOpen) => !isOpen)}
+          >
+            {controlsOpen ? (
+              <PanelLeftClose size={18} aria-hidden="true" />
+            ) : (
+              <PanelLeftOpen size={18} aria-hidden="true" />
+            )}
+            <span>{controlsOpen ? "Hide controls" : "Show controls"}</span>
+          </button>
 
-          <Panel eyebrow="Later" title="Your retirement">
-            <Field
-              label="Annual spending"
-              value={annualSpending}
-              onChange={setAnnualSpending}
-              prefix="$"
-              help="Leave this blank to calculate the annual spending level supported by your savings and desired FIRE age."
-            />
-            <Field
-              label="Withdrawal rate"
-              value={withdrawalRate}
-              onChange={setWithdrawalRate}
-              suffix="%"
-            />
-            <Field
-              label="Inflation"
-              value={inflationRate}
-              onChange={setInflationRate}
-              suffix="%"
-              help="Used to inflate your future FIRE target and retirement withdrawals. Today's dollars reverses this inflation for display."
-            />
-            <details className="advanced-investments advanced-settings">
-              <summary>
-                <SlidersHorizontal size={17} />
-                Advanced Settings
-              </summary>
+          <div className="control-panel-content">
+            <Panel eyebrow="Today" title="Your situation">
+              <Field label="Age" value={age} onChange={setAge} />
+              <Field
+                label="Current savings"
+                value={currentSavings}
+                onChange={setCurrentSavings}
+                prefix="$"
+              />
+              <Field
+                label="Saving monthly"
+                value={monthlyContribution}
+                onChange={setMonthlyContribution}
+                prefix="$"
+                help={[
+                  "Leave this blank to calculate the monthly savings needed for your desired FIRE age.",
+                  "Assumption: each monthly contribution is invested at the start of the month.",
+                ].join("\n\n")}
+              />
+            </Panel>
 
-              <div className="advanced-settings-body">
-                <Field
-                  label="Desired FIRE age"
-                  value={desiredFireAge}
-                  onChange={setDesiredFireAge}
-                  help="Used when monthly savings or annual spending is left blank."
-                />
-                <div className="display-mode-row">
-                  <span>Contribute until</span>
-                  <ContributionStopToggle
-                    value={contributionStopMode}
-                    onChange={setContributionStopMode}
-                  />
+            <Panel eyebrow="Plan" title="Your return assumption">
+              <div className="asset-list compact">
+                {assets
+                  .filter((asset) => asset.key === "stocks")
+                  .map((asset) => (
+                    <AssetRow
+                      key={asset.key}
+                      asset={asset}
+                      onAllocationChange={(allocation) =>
+                        updateAllocation(asset.key, allocation)
+                      }
+                      onReturnChange={(returnRate) =>
+                        updateAsset(asset.key, { returnRate })
+                      }
+                    />
+                  ))}
+              </div>
+
+              <details className="advanced-investments">
+                <summary>
+                  <SlidersHorizontal size={17} />
+                  Advanced investments
+                </summary>
+                <div className="asset-list">
+                  {assets
+                    .filter((asset) => asset.key !== "stocks")
+                    .map((asset) => (
+                      <AssetRow
+                        key={asset.key}
+                        asset={asset}
+                        onAllocationChange={(allocation) =>
+                          updateAllocation(asset.key, allocation)
+                        }
+                        onReturnChange={(returnRate) =>
+                          updateAsset(asset.key, { returnRate })
+                        }
+                      />
+                    ))}
                 </div>
-                {contributionStopMode === STOP_CONTRIBUTING_AT_AGE ? (
+                <div
+                  className={
+                    totalAllocation === 100
+                      ? "return-note"
+                      : "return-note warning"
+                  }
+                >
+                  <strong>
+                    Effective overall rate of return:{" "}
+                    {plan.effectiveReturn.toFixed(2)}%
+                  </strong>
+                  <span>
+                    Allocation total must equal 100%, so changing one allocation
+                    automatically rebalances the others.
+                  </span>
+                </div>
+              </details>
+            </Panel>
+
+            <Panel eyebrow="Retirement" title="Your retirement">
+              <Field
+                label="Annual spending"
+                value={annualSpending}
+                onChange={setAnnualSpending}
+                prefix="$"
+                help="Leave this blank to calculate the annual spending level supported by your savings and desired FIRE age."
+              />
+              <Field
+                label="Withdrawal rate"
+                value={withdrawalRate}
+                onChange={setWithdrawalRate}
+                suffix="%"
+              />
+              <Field
+                label="Inflation"
+                value={inflationRate}
+                onChange={setInflationRate}
+                suffix="%"
+                help="Used to inflate your future FIRE target and retirement withdrawals. Today's dollars reverses this inflation for display."
+              />
+              <details className="advanced-investments advanced-settings">
+                <summary>
+                  <SlidersHorizontal size={17} />
+                  Advanced Settings
+                </summary>
+
+                <div className="advanced-settings-body">
                   <Field
-                    label="Stop age"
-                    value={contributionStopAge}
-                    onChange={setContributionStopAge}
+                    label="Desired FIRE age"
+                    value={desiredFireAge}
+                    onChange={setDesiredFireAge}
+                    help="Used when monthly savings or annual spending is left blank."
                   />
-                ) : null}
-                <div className="display-mode-row">
-                  <span className="row-label-with-help">
-                    Display
-                    <span className="help">
-                      <HelpCircle size={15} />
-                      <span className="help-text">
-                        Today's dollars adjust future values for inflation so
-                        they are shown in current purchasing power. Nominal
-                        dollars show the actual future dollar amounts without
-                        adjusting for inflation.
+                  <div className="display-mode-row">
+                    <span>Contribute until</span>
+                    <ContributionStopToggle
+                      value={contributionStopMode}
+                      onChange={setContributionStopMode}
+                    />
+                  </div>
+                  {contributionStopMode === STOP_CONTRIBUTING_AT_AGE ? (
+                    <Field
+                      label="Stop age"
+                      value={contributionStopAge}
+                      onChange={setContributionStopAge}
+                    />
+                  ) : null}
+                  <div className="display-mode-row">
+                    <span className="row-label-with-help">
+                      Display
+                      <span className="help">
+                        <HelpCircle size={15} />
+                        <span className="help-text">
+                          Today's dollars adjust future values for inflation so
+                          they are shown in current purchasing power. Nominal
+                          dollars show the actual future dollar amounts without
+                          adjusting for inflation.
+                        </span>
                       </span>
                     </span>
-                  </span>
-                  <SegmentedControl
-                    value={displayMode}
-                    onChange={setDisplayMode}
-                  />
+                    <SegmentedControl
+                      value={displayMode}
+                      onChange={setDisplayMode}
+                    />
+                  </div>
                 </div>
-              </div>
-            </details>
-          </Panel>
-        </div>
+              </details>
+            </Panel>
 
-        <Panel eyebrow="The plan" title="Your return assumption">
-          <div className="asset-list compact">
-            {assets
-              .filter((asset) => asset.key === "stocks")
-              .map((asset) => (
-                <AssetRow
-                  key={asset.key}
-                  asset={asset}
-                  onAllocationChange={(allocation) =>
-                    updateAllocation(asset.key, allocation)
-                  }
-                  onReturnChange={(returnRate) =>
-                    updateAsset(asset.key, { returnRate })
-                  }
-                />
-              ))}
+            <Panel eyebrow="Settings" title="Chart controls">
+              <Field
+                label="Final age"
+                value={finalChartAge}
+                onChange={setFinalChartAge}
+                help={`The projection can display through age ${MAX_SUPPORTED_AGE}.`}
+              />
+            </Panel>
           </div>
+        </aside>
 
-          <details className="advanced-investments">
-            <summary>
-              <SlidersHorizontal size={17} />
-              Advanced investments
-            </summary>
-            <div className="asset-list">
-              {assets
-                .filter((asset) => asset.key !== "stocks")
-                .map((asset) => (
-                  <AssetRow
-                    key={asset.key}
-                    asset={asset}
-                    onAllocationChange={(allocation) =>
-                      updateAllocation(asset.key, allocation)
-                    }
-                    onReturnChange={(returnRate) =>
-                      updateAsset(asset.key, { returnRate })
-                    }
-                  />
-                ))}
+        <div className="results-column">
+          <section className="results-band" aria-label="Calculator results">
+            <Stat
+              label={`Your FIRE target (${displayMode})`}
+              value={money(displayedFireTarget, 2)}
+              icon={<DollarSign size={22} />}
+            />
+            <Stat
+              label={
+                plan.fireReachable ? "Retirement age" : "Projected through age"
+              }
+              value={String(plan.retirementAge)}
+              icon={<TrendingUp size={24} />}
+            />
+            <Stat
+              label="Annual savings"
+              value={money(plan.annualSavings, 2)}
+              icon={<PiggyBank size={22} />}
+            />
+            <Stat
+              label={`Calculated ${plan.calculatedField}`}
+              value={calculatedValue}
+              icon={<Calculator size={22} />}
+            />
+          </section>
+
+          {plan.warning ? (
+            <section className="warning-banner" role="alert">
+              <strong>{plan.warning}</strong>
+              <span>
+                The graph still projects the current path through age{" "}
+                {plan.finalChartAge}. Adjust savings, spending, returns, timing,
+                or chart range to make FIRE reachable.
+              </span>
+            </section>
+          ) : null}
+
+          <section className="projection-card" ref={projectionCardRef}>
+            <p className="eyebrow">The journey ahead</p>
+            <div className="projection-heading">
+              <h2>Your FIRE projection</h2>
+              <ChartModeToggle value={chartMode} onChange={setChartMode} />
             </div>
-          </details>
-          <div
-            className={
-              totalAllocation === 100 ? "return-note" : "return-note warning"
-            }
-          >
-            <strong>
-              Effective overall rate of return:{" "}
-              {plan.effectiveReturn.toFixed(2)}%
-            </strong>
-            <span>
-              Allocation total: {totalAllocation}%. This must equal 100%, so
-              changing one allocation automatically rebalances the others.
-            </span>
-          </div>
-        </Panel>
-      </section>
 
-      <section className="results-band" aria-label="Calculator results">
-        <Stat
-          label={`Your FIRE target (${displayMode})`}
-          value={money(displayedFireTarget, 2)}
-          icon={<DollarSign size={22} />}
-        />
-        <Stat
-          label={
-            plan.fireReachable ? "Retirement age" : "Projected through age"
-          }
-          value={String(plan.retirementAge)}
-          icon={<TrendingUp size={24} />}
-        />
-        <Stat
-          label="Annual savings"
-          value={money(plan.annualSavings, 2)}
-          icon={<PiggyBank size={22} />}
-        />
-        <Stat
-          label={`Calculated ${plan.calculatedField}`}
-          value={calculatedValue}
-          icon={<Calculator size={22} />}
-        />
-      </section>
-
-      {plan.warning ? (
-        <section className="warning-banner" role="alert">
-          <strong>{plan.warning}</strong>
-          <span>
-            The graph still projects the current path through age {MAX_AGE};
-            adjust savings, spending, returns, or timing to make FIRE reachable.
-          </span>
-        </section>
-      ) : null}
-
-      <section className="projection-card">
-        <p className="eyebrow">The journey ahead</p>
-        <div className="projection-heading">
-          <h2>Your FIRE projection</h2>
-        </div>
-
-        <div className="chart-wrap">
-          <div
-            className={
-              chartMode === BAR_CHART
-                ? "chart-stage bar-chart-stage"
-                : "chart-stage"
-            }
-            style={
-              chartMode === BAR_CHART
-                ? { minWidth: `${Math.max(880, chartData.length * 34)}px` }
-                : undefined
-            }
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                data={chartData}
-                margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
-                barCategoryGap={chartMode === BAR_CHART ? "18%" : undefined}
-                barGap={chartMode === BAR_CHART ? 0 : undefined}
+            <div className="chart-wrap">
+              <div
+                className={
+                  chartMode === BAR_CHART
+                    ? "chart-stage bar-chart-stage"
+                    : "chart-stage"
+                }
               >
-                <CartesianGrid stroke="#edf0fb" vertical={false} />
-                <XAxis
-                  dataKey="age"
-                  tickLine={false}
-                  axisLine={false}
-                  minTickGap={28}
-                  label={{
-                    value: "Age",
-                    position: "insideBottom",
-                    offset: -10,
-                    fill: "#001a52",
-                    fontSize: 12,
-                  }}
-                />
-                <YAxis
-                  orientation="right"
-                  tickFormatter={compactMoney}
-                  tickLine={false}
-                  axisLine={false}
-                  width={58}
-                />
-                <Tooltip
-                  content={
-                    <ProjectionTooltip
-                      chartMode={chartMode}
-                      displayMode={displayMode}
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={chartData}
+                    margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
+                    barCategoryGap={chartMode === BAR_CHART ? "18%" : undefined}
+                    barGap={chartMode === BAR_CHART ? 0 : undefined}
+                  >
+                    <CartesianGrid stroke="#edf0fb" vertical={false} />
+                    <XAxis
+                      dataKey="age"
+                      tickLine={false}
+                      axisLine={false}
+                      minTickGap={28}
+                      label={{
+                        value: "Age",
+                        position: "insideBottom",
+                        offset: -10,
+                        fill: "#001a52",
+                        fontSize: 12,
+                      }}
                     />
-                  }
-                />
-                <Legend
-                  verticalAlign="bottom"
-                  iconType="circle"
-                  wrapperStyle={{ paddingTop: 24 }}
-                />
-                {chartMode === BAR_CHART ? (
-                  <ReferenceLine y={0} stroke="#d7dcea" />
-                ) : null}
-                <ReferenceLine
-                  y={displayedFireTarget}
-                  stroke="#147a52"
-                  strokeDasharray="3 3"
-                  label={{
-                    value: `Goal: ${compactMoney(displayedFireTarget)}`,
-                    position: "insideTopLeft",
-                    fill: "#147a52",
-                  }}
-                />
-                <ReferenceLine
-                  x={plan.retirementAge}
-                  stroke="#d7d7df"
-                  label={{
-                    value: plan.fireReachable
-                      ? `Retire at ${plan.retirementAge}`
-                      : `Projected to ${plan.retirementAge}`,
-                    position: "top",
-                    fill: "#5130ee",
-                  }}
-                />
+                    <YAxis
+                      orientation="right"
+                      tickFormatter={compactMoney}
+                      tickLine={false}
+                      axisLine={false}
+                      width={58}
+                    />
+                    <Tooltip
+                      content={
+                        <ProjectionTooltip
+                          chartMode={chartMode}
+                          displayMode={displayMode}
+                        />
+                      }
+                    />
+                    <Legend
+                      verticalAlign="bottom"
+                      iconType="circle"
+                      wrapperStyle={{ paddingTop: 24 }}
+                    />
+                    {chartMode === BAR_CHART ? (
+                      <ReferenceLine y={0} stroke="#d7dcea" />
+                    ) : null}
+                    <ReferenceLine
+                      y={displayedFireTarget}
+                      stroke="#147a52"
+                      strokeDasharray="3 3"
+                      label={{
+                        value: `Goal: ${compactMoney(displayedFireTarget)}`,
+                        position: "insideTopLeft",
+                        fill: "#147a52",
+                      }}
+                    />
+                    <ReferenceLine
+                      x={plan.retirementAge}
+                      stroke="#d7d7df"
+                      label={{
+                        value: plan.fireReachable
+                          ? `Retire at ${plan.retirementAge}`
+                          : `Projected to ${plan.retirementAge}`,
+                        position: "top",
+                        fill: "#5130ee",
+                      }}
+                    />
 
-                {chartMode === STANDARD_CHART ? (
-                  <>
-                    <Area
-                      type="monotone"
-                      dataKey="contributionShade"
-                      name="Contributions"
-                      stackId="portfolio"
-                      stroke="#326fc9"
-                      fill="#326fc9"
-                      fillOpacity={0.32}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="growthShade"
-                      name="Growth"
-                      stackId="portfolio"
-                      stroke="#6b7f14"
-                      fill="#6b7f14"
-                      fillOpacity={0.24}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="withdrawals"
-                      name="Withdrawal"
-                      stroke="#d85b2a"
-                      fill="#d85b2a"
-                      fillOpacity={0.18}
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <Bar
-                      dataKey="contributionShade"
-                      name="Contributions"
-                      stackId="assets"
-                      fill="#326fc9"
-                      radius={[10, 10, 0, 0]}
-                      maxBarSize={32}
-                    />
-                    <Bar
-                      dataKey="growthShade"
-                      name="Growth"
-                      stackId="assets"
-                      fill="#97a836"
-                      radius={[10, 10, 0, 0]}
-                      maxBarSize={32}
-                    />
-                    <Bar
-                      dataKey="withdrawalBar"
-                      name="Spending"
-                      fill="#d85b2a"
-                      radius={[0, 0, 10, 10]}
-                      maxBarSize={32}
-                    />
-                  </>
-                )}
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+                    {chartMode === STANDARD_CHART ? (
+                      <>
+                        <Area
+                          type="monotone"
+                          dataKey="contributionShade"
+                          name="Contributions"
+                          stackId="portfolio"
+                          stroke="#326fc9"
+                          fill="#326fc9"
+                          fillOpacity={0.32}
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="growthShade"
+                          name="Growth"
+                          stackId="portfolio"
+                          stroke="#6b7f14"
+                          fill="#6b7f14"
+                          fillOpacity={0.24}
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="withdrawals"
+                          name="Withdrawal"
+                          stroke="#d85b2a"
+                          fill="#d85b2a"
+                          fillOpacity={0.18}
+                          strokeWidth={2}
+                          dot={false}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Bar
+                          dataKey="withdrawalBar"
+                          name="Drawdown"
+                          stackId="assets"
+                          fill="#d85b2a"
+                          radius={[0, 0, 8, 8]}
+                          maxBarSize={32}
+                        />
+                        <Bar
+                          dataKey="contributionShade"
+                          name="Contributions"
+                          stackId="assets"
+                          fill="#326fc9"
+                          radius={[0, 0, 0, 0]}
+                          maxBarSize={32}
+                        />
+                        <Bar
+                          dataKey="growthShade"
+                          name="Growth"
+                          stackId="assets"
+                          fill="#1fb524"
+                          radius={[8, 8, 0, 0]}
+                          maxBarSize={32}
+                        />
+                      </>
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </section>
         </div>
-
-        <div className="projection-summary">
-          <div>
-            <BarChart3 size={18} />
-            <span>
-              {plan.fireReachable
-                ? `${plan.yearsToRetirement} years until target`
-                : `Not reached by age ${MAX_AGE}`}
-            </span>
-          </div>
-          <div>
-            <DollarSign size={18} />
-            <span>
-              {money(displayedPortfolioAtRetirement)} projected at retirement
-            </span>
-          </div>
-          <div>
-            <Percent size={18} />
-            <span>
-              {plan.yearsFunded >= MAX_DRAWDOWN_YEARS
-                ? `${MAX_DRAWDOWN_YEARS}+`
-                : plan.yearsFunded}{" "}
-              drawdown years shown
-            </span>
-          </div>
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
