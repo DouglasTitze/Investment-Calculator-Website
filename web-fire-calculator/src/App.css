@@ -517,8 +517,8 @@ white-space: nowrap;
 }
 
 .chart-wrap {
-height: min(62vh, 640px);
-    min-height: 540px;
+  height: min(62vh, 640px);
+  min-height: 540px;
   margin-top: 24px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -528,11 +528,28 @@ height: min(62vh, 640px);
 .chart-stage {
   height: 100%;
   min-width: 100%;
+  min-height: 0;
 }
 
 .bar-chart-stage {
-box-sizing: border-box;
+  box-sizing: border-box;
   padding-inline: 10px;
+}
+
+.bar-chart-stage .recharts-inactive-bar {
+  transition:
+    opacity 150ms ease,
+    fill-opacity 150ms ease;
+}
+
+.bar-chart-stage:has(.recharts-active-bar) .recharts-inactive-bar {
+  opacity: 0.38;
+  fill-opacity: 0.38;
+}
+
+.bar-chart-stage .recharts-active-bar {
+  opacity: 1;
+  fill-opacity: 1;
 }
 
 .chart-setting-readout {

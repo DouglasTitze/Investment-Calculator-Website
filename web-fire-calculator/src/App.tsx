@@ -6,11 +6,13 @@ import {
   ComposedChart,
   Legend,
   ReferenceLine,
+  Rectangle,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import type { BarShapeProps } from "recharts/types/cartesian/Bar";
 import {
   BarChart3,
   Calculator,
@@ -38,6 +40,8 @@ const DISPLAY_MODES = [
 const STANDARD_CHART = "Standard";
 const BAR_CHART = "Bar graph";
 const CHART_MODES = [STANDARD_CHART, BAR_CHART] as const;
+const BAR_CORNER_RADIUS = 2;
+const BAR_GAP_PX = 2;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
 
@@ -47,6 +51,18 @@ type ChartMode = (typeof CHART_MODES)[number];
 type ContributionStopMode =
   | typeof STOP_CONTRIBUTING_AT_FIRE
   | typeof STOP_CONTRIBUTING_AT_AGE;
+
+function BarShape(props: BarShapeProps & { gap?: number }) {
+  const gap = props.gap ?? BAR_GAP_PX;
+  const x = Math.floor(props.x + gap / 2);
+  const right = Math.ceil(props.x + props.width - gap / 2);
+
+  return <Rectangle {...props} x={x} width={Math.max(right - x, 1)} />;
+}
+
+function ActiveBar(props: BarShapeProps) {
+  return <BarShape {...props} />;
+}
 
 type AssetInput = {
   key: AssetKey;
@@ -860,7 +876,7 @@ export default function App() {
   const [currentSavings, setCurrentSavings] = useState("936");
   const [monthlyContribution, setMonthlyContribution] = useState("411"); // 3618, 4118, 4618
   const [annualSpending, setAnnualSpending] = useState("70000");
-  const [withdrawalRate, setWithdrawalRate] = useState("3.5");
+  const [withdrawalRate, setWithdrawalRate] = useState("4.5");
   const [inflationRate, setInflationRate] = useState("3");
   const [desiredFireAge, setDesiredFireAge] = useState("");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
@@ -1292,11 +1308,12 @@ export default function App() {
                     : "chart-stage"
                 }
               >
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <ComposedChart
+                    key={chartMode}
                     data={chartData}
                     margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
-                    barCategoryGap={chartMode === BAR_CHART ? "18%" : undefined}
+                    barCategoryGap={chartMode === BAR_CHART ? 0 : undefined}
                     barGap={chartMode === BAR_CHART ? 0 : undefined}
                   >
                     <CartesianGrid stroke="#edf0fb" vertical={false} />
@@ -1400,8 +1417,10 @@ export default function App() {
                           name="Drawdown"
                           stackId="assets"
                           fill="#d85b2a"
-                          radius={[0, 0, 8, 8]}
-                          maxBarSize={32}
+                          radius={[0, 0, BAR_CORNER_RADIUS, BAR_CORNER_RADIUS]}
+                          shape={BarShape}
+                          activeBar={ActiveBar}
+                          isAnimationActive={false}
                         />
                         <Bar
                           dataKey="contributionShade"
@@ -1409,15 +1428,19 @@ export default function App() {
                           stackId="assets"
                           fill="#326fc9"
                           radius={[0, 0, 0, 0]}
-                          maxBarSize={32}
+                          shape={BarShape}
+                          activeBar={ActiveBar}
+                          isAnimationActive={false}
                         />
                         <Bar
                           dataKey="growthShade"
                           name="Growth"
                           stackId="assets"
                           fill="#1fb524"
-                          radius={[8, 8, 0, 0]}
-                          maxBarSize={32}
+                          radius={[BAR_CORNER_RADIUS, BAR_CORNER_RADIUS, 0, 0]}
+                          shape={BarShape}
+                          activeBar={ActiveBar}
+                          isAnimationActive={false}
                         />
                       </>
                     )}
