@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 
-const DEFAULT_FINAL_CHART_AGE = 120;
+const DEFAULT_FINAL_CHART_AGE = 85;
 const MAX_SUPPORTED_AGE = 150;
 const MAX_ACCUMULATION_YEARS = MAX_SUPPORTED_AGE;
 const MAX_DRAWDOWN_YEARS = MAX_SUPPORTED_AGE;
