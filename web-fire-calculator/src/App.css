@@ -741,7 +741,7 @@ input[type="range"] {
 
 .stat strong {
   color: #152044;
-  font-size: clamp(24px, 2.4vw, 38px);
+font-size: clamp(24px, 2.4vw, 36px);
   font-weight: 950;
   line-height: 1;
   overflow-wrap: anywhere;
@@ -919,7 +919,7 @@ input[type="range"] {
 
 .bar-chart-stage .recharts-bar-rectangles,
 .bar-chart-stage .recharts-bar-background {
-  animation: bar-chart-wipe-in 760ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
+animation: bar-chart-wipe-in 1250ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
   clip-path: inset(0 100% 0 0);
   transform-box: fill-box;
 }

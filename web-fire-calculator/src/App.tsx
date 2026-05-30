@@ -1321,7 +1321,7 @@ export default function App() {
           <section className="results-band" aria-label="Calculator results">
             <Stat
               label={`Your FIRE target (${displayMode})`}
-              value={money(displayedFireTarget, 2)}
+              value={money(displayedFireTarget, 0)}
               icon={<DollarSign size={22} />}
             />
             <Stat
