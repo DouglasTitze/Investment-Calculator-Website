@@ -19,10 +19,12 @@ import {
   ChartNoAxesCombined,
   DollarSign,
   HelpCircle,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PiggyBank,
   SlidersHorizontal,
+  Sun,
   TrendingUp,
 } from "lucide-react";
 import "./App.css";
@@ -44,10 +46,12 @@ const CHART_MODES = [STANDARD_CHART, BAR_CHART] as const;
 const BAR_GAP_PX = 2;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
+const THEME_STORAGE_KEY = "fire-calculator-theme";
 
 type AssetKey = "stocks" | "bonds" | "cash";
 type DisplayMode = (typeof DISPLAY_MODES)[number];
 type ChartMode = (typeof CHART_MODES)[number];
+type ThemeMode = "light" | "dark";
 type ContributionStopMode =
   | typeof STOP_CONTRIBUTING_AT_FIRE
   | typeof STOP_CONTRIBUTING_AT_AGE;
@@ -876,6 +880,12 @@ function ProjectionTooltip(props: {
 }
 
 export default function App() {
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window === "undefined") return "light";
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark"
+      ? "dark"
+      : "light";
+  });
   const [age, setAge] = useState("23");
   const [currentSavings, setCurrentSavings] = useState("936");
   const [monthlyContribution, setMonthlyContribution] = useState("411"); // 3618, 4118, 4618
@@ -1019,6 +1029,12 @@ export default function App() {
 
   const calculatorLayoutRef = useRef<HTMLDivElement>(null);
   const projectionCardRef = useRef<HTMLElement>(null);
+  const isDarkMode = themeMode === "dark";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
   useEffect(() => {
     const calculatorLayout = calculatorLayoutRef.current;
@@ -1061,7 +1077,7 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell theme-${themeMode}`}>
       <div className="motion-backdrop" aria-hidden="true">
         <span className="ribbon ribbon-one" />
         <span className="ribbon ribbon-two" />
@@ -1072,11 +1088,31 @@ export default function App() {
       </div>
 
       <header className="topbar">
-        <div>
-          <span className="brand-mark">
-            <Calculator size={18} />
-            FIRE Calculator
-          </span>
+        <div className="topbar-content">
+          <div className="brand-row">
+            <span className="brand-mark">
+              <Calculator size={18} />
+              FIRE Calculator
+            </span>
+            <button
+              type="button"
+              className="theme-toggle"
+              aria-label={`Switch to ${isDarkMode ? "light" : "dark"} mode`}
+              aria-pressed={isDarkMode}
+              onClick={() =>
+                setThemeMode((current) =>
+                  current === "dark" ? "light" : "dark",
+                )
+              }
+            >
+              {isDarkMode ? (
+                <Sun size={18} aria-hidden="true" />
+              ) : (
+                <Moon size={18} aria-hidden="true" />
+              )}
+              <span>{isDarkMode ? "Light mode" : "Dark mode"}</span>
+            </button>
+          </div>
           <h1>Financial Independence Retire Early</h1>
           <p className="hero-copy">
             Tune your savings, returns, spending, and timeline, to view your
@@ -1433,7 +1469,10 @@ export default function App() {
                         <stop offset="100%" stopColor="#ff8a3d" />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid stroke="#dfe9ff" vertical={false} />
+                    <CartesianGrid
+                      stroke={isDarkMode ? "#263550" : "#dfe9ff"}
+                      vertical={false}
+                    />
                     <XAxis
                       dataKey="age"
                       tickLine={false}
@@ -1443,7 +1482,7 @@ export default function App() {
                         value: "Age",
                         position: "insideBottom",
                         offset: -10,
-                        fill: "#5130ee",
+                        fill: isDarkMode ? "#8ec5ff" : "#5130ee",
                         fontSize: 12,
                         fontWeight: 800,
                       }}
@@ -1469,7 +1508,10 @@ export default function App() {
                       wrapperStyle={{ paddingTop: 24 }}
                     />
                     {chartMode === BAR_CHART ? (
-                      <ReferenceLine y={0} stroke="#cfd8ff" />
+                      <ReferenceLine
+                        y={0}
+                        stroke={isDarkMode ? "#344461" : "#cfd8ff"}
+                      />
                     ) : null}
                     <ReferenceLine
                       y={displayedFireTarget}
@@ -1479,7 +1521,7 @@ export default function App() {
                       label={{
                         value: `Goal: ${compactMoney(displayedFireTarget)}`,
                         position: "insideTopLeft",
-                        fill: "#008b70",
+                        fill: isDarkMode ? "#5ee0b4" : "#008b70",
                         fontWeight: 800,
                         dy: -30,
                       }}
@@ -1494,7 +1536,7 @@ export default function App() {
                           ? `Retire at ${plan.retirementAge}`
                           : `Projected to ${plan.retirementAge}`,
                         position: "top",
-                        fill: "#eb2f87",
+                        fill: isDarkMode ? "#ff8fca" : "#eb2f87",
                         fontWeight: 800,
                       }}
                     />

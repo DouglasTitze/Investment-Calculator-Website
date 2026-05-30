@@ -20,6 +20,12 @@ body {
     linear-gradient(180deg, #ffffff 0%, #ffffff 48%, #f5f7ff 100%);
 }
 
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at top left, #18314d 0, transparent 34%),
+    linear-gradient(180deg, #08111f 0%, #0d1424 58%, #0a0f1b 100%);
+}
+
 button,
 input {
   font: inherit;

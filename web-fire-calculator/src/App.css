@@ -137,6 +137,48 @@
   text-transform: uppercase;
 }
 
+.topbar-content {
+  min-width: 0;
+}
+
+.brand-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid rgba(81, 48, 238, 0.16);
+  border-radius: 999px;
+  padding: 8px 13px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 12px 26px rgba(32, 42, 95, 0.1);
+  color: #333e63;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.theme-toggle:hover {
+  border-color: rgba(255, 76, 154, 0.35);
+  background: #fff;
+  color: #5130ee;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(81, 48, 238, 0.16);
+}
+
 h1 {
   max-width: 850px;
   margin: 16px 0 0;
@@ -1051,6 +1093,224 @@ input[type="range"] {
 .projection-summary svg {
   color: #ffe45c;
   flex: 0 0 auto;
+}
+
+.theme-dark {
+  color: #e9f1ff;
+}
+
+.theme-dark .motion-backdrop::before {
+  background:
+    linear-gradient(115deg, rgba(94, 224, 180, 0.13) 0 18%, transparent 18% 36%),
+    linear-gradient(62deg, transparent 0 58%, rgba(255, 76, 154, 0.1) 58% 74%, transparent 74%),
+    linear-gradient(152deg, transparent 0 42%, rgba(142, 197, 255, 0.13) 42% 62%, transparent 62%),
+    linear-gradient(135deg, #09111f 0%, #0f1a2d 48%, #111827 100%);
+}
+
+.theme-dark .motion-backdrop::after {
+  background-image:
+    linear-gradient(rgba(142, 197, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(142, 197, 255, 0.08) 1px, transparent 1px);
+}
+
+.theme-dark .ribbon {
+  opacity: 0.46;
+  filter: blur(4px) saturate(0.86);
+}
+
+.theme-dark .coin {
+  border-color: rgba(142, 197, 255, 0.16);
+  background: rgba(13, 23, 38, 0.72);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.34);
+  color: #8ec5ff;
+}
+
+.theme-dark .coin-two {
+  color: #ff8fca;
+}
+
+.theme-dark .coin-three {
+  color: #5ee0b4;
+}
+
+.theme-dark .topbar,
+.theme-dark .controls-sidebar,
+.theme-dark .projection-card,
+.theme-dark .results-band {
+  border-color: rgba(142, 197, 255, 0.14);
+  background: rgba(13, 23, 38, 0.82);
+  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.38);
+}
+
+.theme-dark .warning-banner {
+  border-color: rgba(255, 184, 107, 0.3);
+  background: rgba(67, 39, 17, 0.78);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.28);
+  color: #ffd8a8;
+}
+
+.theme-dark .warning-banner strong {
+  color: #ffbe7a;
+}
+
+.theme-dark .brand-mark,
+.theme-dark .stat-icon,
+.theme-dark .projection-summary div {
+  background: #e9f1ff;
+  color: #08111f;
+}
+
+.theme-dark .theme-toggle {
+  border-color: rgba(142, 197, 255, 0.18);
+  background: rgba(8, 17, 31, 0.76);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.26);
+  color: #d8e6ff;
+}
+
+.theme-dark .theme-toggle:hover {
+  border-color: rgba(94, 224, 180, 0.42);
+  background: rgba(16, 27, 46, 0.94);
+  color: #5ee0b4;
+}
+
+.theme-dark h1,
+.theme-dark h2,
+.theme-dark .asset-heading,
+.theme-dark .field-control input,
+.theme-dark .mini-field input,
+.theme-dark .stat strong,
+.theme-dark .tooltip-total strong,
+.theme-dark .tooltip-line strong {
+  color: #f8fbff;
+}
+
+.theme-dark .hero-copy,
+.theme-dark .field-label,
+.theme-dark .display-mode-row,
+.theme-dark .slider-row,
+.theme-dark .mini-field,
+.theme-dark .return-note,
+.theme-dark .stat span:last-child,
+.theme-dark .projection-heading p,
+.theme-dark .tooltip-total,
+.theme-dark .tooltip-line {
+  color: #b7c5dc;
+}
+
+.theme-dark .help {
+  color: #8ec5ff;
+}
+
+.theme-dark .help-text,
+.theme-dark .chart-tooltip {
+  border-color: rgba(142, 197, 255, 0.2);
+  background: rgba(9, 17, 31, 0.98);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.42);
+  color: #d8e6ff;
+}
+
+.theme-dark .field-control,
+.theme-dark .mini-field,
+.theme-dark .segmented-control,
+.theme-dark .chart-mode-toggle,
+.theme-dark .advanced-investments summary,
+.theme-dark .chart-wrap {
+  border-color: rgba(142, 197, 255, 0.16);
+  background: rgba(8, 17, 31, 0.62);
+  box-shadow: inset 0 -12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.theme-dark .field-control:focus-within,
+.theme-dark .mini-field:focus-within {
+  border-color: #5ee0b4;
+  box-shadow: 0 0 0 4px rgba(94, 224, 180, 0.15);
+}
+
+.theme-dark .field-affix,
+.theme-dark .advanced-investments summary,
+.theme-dark .tooltip-title {
+  color: #8ec5ff;
+}
+
+.theme-dark .advanced-investments summary:hover {
+  border-color: rgba(94, 224, 180, 0.36);
+  background: rgba(16, 27, 46, 0.94);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.3);
+}
+
+.theme-dark .controls-toggle,
+.theme-dark .segmented-control button.active,
+.theme-dark .chart-mode-toggle button.active {
+  background: linear-gradient(135deg, #2463eb, #be3d82);
+  color: #fff;
+  box-shadow: 0 13px 28px rgba(36, 99, 235, 0.24);
+}
+
+.theme-dark .controls-toggle {
+  border-bottom-color: rgba(142, 197, 255, 0.14);
+}
+
+.theme-dark .segmented-control button,
+.theme-dark .chart-mode-toggle button {
+  color: #c3d2e8;
+}
+
+.theme-dark .controls-sidebar .panel + .panel,
+.theme-dark .advanced-investments,
+.theme-dark .advanced-investments .asset-row,
+.theme-dark .return-note {
+  border-color: rgba(142, 197, 255, 0.13);
+}
+
+.theme-dark .stat {
+  background: rgba(9, 17, 31, 0.78);
+  box-shadow: inset 0 -18px 34px rgba(142, 197, 255, 0.05);
+}
+
+.theme-dark .stat::before {
+  opacity: 0.46;
+}
+
+.theme-dark .chart-wrap {
+  background:
+    linear-gradient(180deg, rgba(9, 17, 31, 0.88), rgba(13, 23, 38, 0.78)),
+    repeating-linear-gradient(135deg, rgba(142, 197, 255, 0.04) 0 8px, transparent 8px 18px);
+}
+
+.theme-dark .chart-wrap::before {
+  border-color: rgba(94, 224, 180, 0.14);
+}
+
+.theme-dark .chart-wrap::after {
+  opacity: 0.32;
+}
+
+.theme-dark .recharts-wrapper {
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.28));
+}
+
+.theme-dark .recharts-cartesian-axis-tick-value,
+.theme-dark .recharts-legend-wrapper {
+  fill: #b7c5dc;
+  color: #b7c5dc;
+}
+
+.theme-dark .recharts-reference-line-label {
+  stroke: rgba(9, 17, 31, 0.92);
+}
+
+.theme-dark .recharts-default-legend {
+  border-color: rgba(142, 197, 255, 0.14);
+  background: rgba(9, 17, 31, 0.78);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.theme-dark .recharts-area-area {
+  mix-blend-mode: screen;
+}
+
+.theme-dark .projection-summary svg {
+  color: #2463eb;
 }
 
 @keyframes grid-drift {
