@@ -16,6 +16,7 @@ import type { BarShapeProps } from "recharts/types/cartesian/Bar";
 import {
   BarChart3,
   Calculator,
+  ChartNoAxesCombined,
   DollarSign,
   HelpCircle,
   PanelLeftClose,
@@ -40,7 +41,6 @@ const DISPLAY_MODES = [
 const STANDARD_CHART = "Standard";
 const BAR_CHART = "Bar graph";
 const CHART_MODES = [STANDARD_CHART, BAR_CHART] as const;
-const BAR_CORNER_RADIUS = 2;
 const BAR_GAP_PX = 2;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
@@ -566,6 +566,15 @@ function calculatePlan(args: {
     drawdownYear += 1
   ) {
     const absoluteYear = yearsToRetirement + drawdownYear - 1;
+    const shouldContributeThisYear =
+      contributionYears !== undefined && absoluteYear < contributionYears;
+    const postFireContribution = shouldContributeThisYear ? annualSavings : 0;
+
+    if (postFireContribution > 0) {
+      contributionBucket += postFireContribution;
+      portfolio += postFireContribution;
+    }
+
     const plannedWithdrawal =
       expectedAnnualExpenses * inflationFactor(inflationRatePct, absoluteYear);
     const actualWithdrawal = Math.min(portfolio, plannedWithdrawal);
@@ -701,7 +710,7 @@ function ChartModeToggle(props: {
           onClick={() => props.onChange(mode)}
         >
           {mode === STANDARD_CHART ? (
-            <TrendingUp size={16} aria-hidden="true" />
+            <ChartNoAxesCombined size={16} aria-hidden="true" />
           ) : (
             <BarChart3 size={16} aria-hidden="true" />
           )}
@@ -737,14 +746,9 @@ function ContributionStopToggle(props: {
   );
 }
 
-function Panel(props: {
-  eyebrow: string;
-  title: string;
-  children: React.ReactNode;
-}) {
+function Panel(props: { title: string; children: React.ReactNode }) {
   return (
     <section className="panel">
-      <p className="eyebrow">{props.eyebrow}</p>
       <h2>{props.title}</h2>
       <div className="panel-body">{props.children}</div>
     </section>
@@ -787,7 +791,7 @@ function AssetRow(props: {
       </label>
 
       <label className="mini-field">
-        <span>Growth rate</span>
+        <span>Nominal annual return</span>
         <input
           value={props.asset.returnRate}
           onChange={(event) =>
@@ -895,7 +899,7 @@ export default function App() {
   const [contributionStopAge, setContributionStopAge] = useState("60");
   const [assets, setAssets] = useState<AssetInput[]>([
     { key: "stocks", name: "Stocks / ETFs", allocation: 100, returnRate: 10 },
-    { key: "bonds", name: "Savings / Bonds", allocation: 0, returnRate: 4 },
+    { key: "bonds", name: "Savings / Bonds", allocation: 0, returnRate: 3 },
     { key: "cash", name: "Cash", allocation: 0, returnRate: 0 },
   ]);
 
@@ -1058,13 +1062,34 @@ export default function App() {
 
   return (
     <main className="app-shell">
+      <div className="motion-backdrop" aria-hidden="true">
+        <span className="ribbon ribbon-one" />
+        <span className="ribbon ribbon-two" />
+        <span className="ribbon ribbon-three" />
+        <span className="coin coin-one">$</span>
+        <span className="coin coin-two">%</span>
+        <span className="coin coin-three">+</span>
+      </div>
+
       <header className="topbar">
         <div>
           <span className="brand-mark">
             <Calculator size={18} />
-            Financial Independence, Retire Early (FIRE)
+            FIRE Calculator
           </span>
-          <h1>Retirement Calculator</h1>
+          <h1>Financial Independence Retire Early</h1>
+          <p className="hero-copy">
+            Tune your savings, returns, spending, and timeline, to view your
+            potential retirement path.
+          </p>
+        </div>
+        <div className="hero-orbit" aria-hidden="true">
+          <span className="orbit-ring" />
+          <span className="orbit-core">
+            <TrendingUp size={34} />
+          </span>
+          <span className="orbit-dot orbit-dot-one" />
+          <span className="orbit-dot orbit-dot-two" />
         </div>
       </header>
 
@@ -1097,7 +1122,7 @@ export default function App() {
           </button>
 
           <div className="control-panel-content">
-            <Panel eyebrow="Today" title="Your situation">
+            <Panel title="Today">
               <Field label="Age" value={age} onChange={setAge} />
               <Field
                 label="Current savings"
@@ -1117,7 +1142,7 @@ export default function App() {
               />
             </Panel>
 
-            <Panel eyebrow="Plan" title="Your return assumption">
+            <Panel title="Assumptions">
               <div className="asset-list compact">
                 {assets
                   .filter((asset) => asset.key === "stocks")
@@ -1164,7 +1189,7 @@ export default function App() {
                   }
                 >
                   <strong>
-                    Effective overall rate of return:{" "}
+                    Effective nominal annual return:{" "}
                     {plan.effectiveReturn.toFixed(2)}%
                   </strong>
                   <span>
@@ -1175,7 +1200,7 @@ export default function App() {
               </details>
             </Panel>
 
-            <Panel eyebrow="Retirement" title="Your retirement">
+            <Panel title="Retirement">
               <Field
                 label="Annual spending"
                 value={annualSpending}
@@ -1245,7 +1270,7 @@ export default function App() {
               </details>
             </Panel>
 
-            <Panel eyebrow="Settings" title="Chart controls">
+            <Panel title="Chart Controls">
               <Field
                 label="Final age"
                 value={finalChartAge}
@@ -1294,9 +1319,16 @@ export default function App() {
           ) : null}
 
           <section className="projection-card" ref={projectionCardRef}>
-            <p className="eyebrow">The journey ahead</p>
+            <div className="chart-confetti" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
             <div className="projection-heading">
-              <h2>Your FIRE projection</h2>
+              <div>
+                <h2>FIRE Projection</h2>
+              </div>
               <ChartModeToggle value={chartMode} onChange={setChartMode} />
             </div>
 
@@ -1310,13 +1342,98 @@ export default function App() {
               >
                 <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <ComposedChart
-                    key={chartMode}
                     data={chartData}
                     margin={{ top: 28, right: 22, bottom: 22, left: 8 }}
                     barCategoryGap={chartMode === BAR_CHART ? 0 : undefined}
                     barGap={chartMode === BAR_CHART ? 0 : undefined}
                   >
-                    <CartesianGrid stroke="#edf0fb" vertical={false} />
+                    <defs>
+                      <linearGradient
+                        id="contributionGradient"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="0%"
+                          stopColor="#18b6ff"
+                          stopOpacity="0.88"
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor="#5130ee"
+                          stopOpacity="0.22"
+                        />
+                      </linearGradient>
+                      <linearGradient
+                        id="growthGradient"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="0%"
+                          stopColor="#35d399"
+                          stopOpacity="0.86"
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor="#ffe45c"
+                          stopOpacity="0.26"
+                        />
+                      </linearGradient>
+                      <linearGradient
+                        id="withdrawalGradient"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="0%"
+                          stopColor="#ff4c9a"
+                          stopOpacity="0.76"
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor="#ff8a3d"
+                          stopOpacity="0.2"
+                        />
+                      </linearGradient>
+                      <linearGradient
+                        id="barContributionGradient"
+                        x1="0"
+                        y1="0"
+                        x2="1"
+                        y2="0"
+                      >
+                        <stop offset="0%" stopColor="#5130ee" />
+                        <stop offset="100%" stopColor="#18b6ff" />
+                      </linearGradient>
+                      <linearGradient
+                        id="barGrowthGradient"
+                        x1="0"
+                        y1="0"
+                        x2="1"
+                        y2="0"
+                      >
+                        <stop offset="0%" stopColor="#20bf75" />
+                        <stop offset="100%" stopColor="#ffe45c" />
+                      </linearGradient>
+                      <linearGradient
+                        id="barWithdrawalGradient"
+                        x1="0"
+                        y1="0"
+                        x2="1"
+                        y2="0"
+                      >
+                        <stop offset="0%" stopColor="#ff4c9a" />
+                        <stop offset="100%" stopColor="#ff8a3d" />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#dfe9ff" vertical={false} />
                     <XAxis
                       dataKey="age"
                       tickLine={false}
@@ -1326,8 +1443,9 @@ export default function App() {
                         value: "Age",
                         position: "insideBottom",
                         offset: -10,
-                        fill: "#001a52",
+                        fill: "#5130ee",
                         fontSize: 12,
+                        fontWeight: 800,
                       }}
                     />
                     <YAxis
@@ -1351,27 +1469,33 @@ export default function App() {
                       wrapperStyle={{ paddingTop: 24 }}
                     />
                     {chartMode === BAR_CHART ? (
-                      <ReferenceLine y={0} stroke="#d7dcea" />
+                      <ReferenceLine y={0} stroke="#cfd8ff" />
                     ) : null}
                     <ReferenceLine
                       y={displayedFireTarget}
-                      stroke="#147a52"
-                      strokeDasharray="3 3"
+                      stroke="#20bf75"
+                      strokeDasharray="7 5"
+                      strokeWidth={2}
                       label={{
                         value: `Goal: ${compactMoney(displayedFireTarget)}`,
                         position: "insideTopLeft",
-                        fill: "#147a52",
+                        fill: "#008b70",
+                        fontWeight: 800,
+                        dy: -30,
                       }}
                     />
                     <ReferenceLine
                       x={plan.retirementAge}
-                      stroke="#d7d7df"
+                      stroke="#ff4c9a"
+                      strokeDasharray="5 5"
+                      strokeWidth={2}
                       label={{
                         value: plan.fireReachable
                           ? `Retire at ${plan.retirementAge}`
                           : `Projected to ${plan.retirementAge}`,
                         position: "top",
-                        fill: "#5130ee",
+                        fill: "#eb2f87",
+                        fontWeight: 800,
                       }}
                     />
 
@@ -1382,32 +1506,44 @@ export default function App() {
                           dataKey="contributionShade"
                           name="Contributions"
                           stackId="portfolio"
-                          stroke="#326fc9"
-                          fill="#326fc9"
-                          fillOpacity={0.32}
-                          strokeWidth={2}
+                          stroke="#18b6ff"
+                          fill="url(#contributionGradient)"
+                          fillOpacity={1}
+                          strokeWidth={3}
                           dot={false}
+                          isAnimationActive={true}
+                          animationDuration={850}
+                          animationEasing="ease-out"
+                          activeDot={{ r: 6, stroke: "#fff", strokeWidth: 3 }}
                         />
                         <Area
                           type="monotone"
                           dataKey="growthShade"
                           name="Growth"
                           stackId="portfolio"
-                          stroke="#6b7f14"
-                          fill="#6b7f14"
-                          fillOpacity={0.24}
-                          strokeWidth={2}
+                          stroke="#20bf75"
+                          fill="url(#growthGradient)"
+                          fillOpacity={1}
+                          strokeWidth={3}
                           dot={false}
+                          isAnimationActive={true}
+                          animationDuration={850}
+                          animationEasing="ease-out"
+                          activeDot={{ r: 6, stroke: "#fff", strokeWidth: 3 }}
                         />
                         <Area
                           type="monotone"
                           dataKey="withdrawals"
                           name="Withdrawal"
-                          stroke="#d85b2a"
-                          fill="#d85b2a"
-                          fillOpacity={0.18}
-                          strokeWidth={2}
+                          stroke="#ff4c9a"
+                          fill="url(#withdrawalGradient)"
+                          fillOpacity={1}
+                          strokeWidth={3}
                           dot={false}
+                          isAnimationActive={true}
+                          animationDuration={850}
+                          animationEasing="ease-out"
+                          activeDot={{ r: 6, stroke: "#fff", strokeWidth: 3 }}
                         />
                       </>
                     ) : (
@@ -1416,8 +1552,8 @@ export default function App() {
                           dataKey="withdrawalBar"
                           name="Drawdown"
                           stackId="assets"
-                          fill="#d85b2a"
-                          radius={[0, 0, BAR_CORNER_RADIUS, BAR_CORNER_RADIUS]}
+                          fill="url(#barWithdrawalGradient)"
+                          radius={[0, 0, 4, 4]}
                           shape={BarShape}
                           activeBar={ActiveBar}
                           isAnimationActive={false}
@@ -1426,7 +1562,7 @@ export default function App() {
                           dataKey="contributionShade"
                           name="Contributions"
                           stackId="assets"
-                          fill="#326fc9"
+                          fill="url(#barContributionGradient)"
                           radius={[0, 0, 0, 0]}
                           shape={BarShape}
                           activeBar={ActiveBar}
@@ -1436,8 +1572,8 @@ export default function App() {
                           dataKey="growthShade"
                           name="Growth"
                           stackId="assets"
-                          fill="#1fb524"
-                          radius={[BAR_CORNER_RADIUS, BAR_CORNER_RADIUS, 0, 0]}
+                          fill="url(#barGrowthGradient)"
+                          radius={[4, 4, 0, 0]}
                           shape={BarShape}
                           activeBar={ActiveBar}
                           isAnimationActive={false}
@@ -1446,6 +1582,20 @@ export default function App() {
                     )}
                   </ComposedChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="projection-summary" aria-label="Projection summary">
+              <div>
+                <TrendingUp size={18} />
+                <span>{plan.yearsToRetirement} years to FIRE</span>
+              </div>
+              <div>
+                <DollarSign size={18} />
+                <span>{money(plan.portfolioAtRetirement)} at retirement</span>
+              </div>
+              <div>
+                <PiggyBank size={18} />
+                <span>{plan.yearsFunded || 0} retirement years mapped</span>
               </div>
             </div>
           </section>
