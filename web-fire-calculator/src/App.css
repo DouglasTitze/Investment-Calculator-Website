@@ -386,15 +386,21 @@ h2 {
 
 .field-label,
 .row-label-with-help {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
 }
 
 .help {
   position: relative;
   display: inline-flex;
+  justify-self: end;
   color: #5130ee;
+}
+
+.help svg {
+  display: block;
 }
 
 .help-text {

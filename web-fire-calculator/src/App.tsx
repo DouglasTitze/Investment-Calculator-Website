@@ -741,6 +741,7 @@ function Field(props: {
   prefix?: string;
   suffix?: string;
   help?: string;
+  onBlur?: () => void;
 }) {
   return (
     <label className="field">
@@ -761,6 +762,7 @@ function Field(props: {
           aria-label={props.label}
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
+          onBlur={props.onBlur}
           inputMode="decimal"
         />
         {props.suffix ? (
@@ -1017,7 +1019,8 @@ export default function App() {
   );
   const [contributionStopMode, setContributionStopMode] =
     useState<ContributionStopMode>(STOP_CONTRIBUTING_AT_FIRE);
-  const [contributionStopAge, setContributionStopAge] = useState("60");
+  const [contributionStopAge, setContributionStopAge] = useState("");
+  const hasInitializedContributionStopAge = useRef(false);
   const [assets, setAssets] = useState<AssetInput[]>([
     {
       key: "stocks",
@@ -1043,6 +1046,29 @@ export default function App() {
   const savingsAndCash =
     Math.max(numberFromInput(bondsAsset?.currentValue ?? "0"), 0) +
     Math.max(numberFromInput(cashAsset?.currentValue ?? "0"), 0);
+  const currentAgeInput = String(
+    clamp(Math.round(numberFromInput(age, 30)), 0, MAX_SUPPORTED_AGE),
+  );
+
+  const handleContributionStopModeChange = (mode: ContributionStopMode) => {
+    setContributionStopMode(mode);
+    if (
+      mode === STOP_CONTRIBUTING_AT_AGE &&
+      !hasInitializedContributionStopAge.current
+    ) {
+      setContributionStopAge(currentAgeInput);
+      hasInitializedContributionStopAge.current = true;
+    }
+  };
+
+  const handleContributionStopAgeBlur = () => {
+    const stopAge = optionalNumberFromInput(contributionStopAge);
+    const currentAge = numberFromInput(currentAgeInput, 30);
+
+    if (stopAge === null || stopAge < currentAge) {
+      setContributionStopAge(currentAgeInput);
+    }
+  };
 
   const plan = useMemo(
     () =>
@@ -1238,7 +1264,7 @@ export default function App() {
           </div>
           <h1>Financial Independence Retire Early</h1>
           <p className="hero-copy">
-            Tune your savings, returns, spending, and timeline, to view your
+            Tune your savings, returns, spending, and timeline to view your
             potential retirement path.
           </p>
         </div>
@@ -1420,7 +1446,7 @@ export default function App() {
                     <span>Contribute until</span>
                     <ContributionStopToggle
                       value={contributionStopMode}
-                      onChange={setContributionStopMode}
+                      onChange={handleContributionStopModeChange}
                     />
                   </div>
                   {contributionStopMode === STOP_CONTRIBUTING_AT_AGE ? (
@@ -1428,6 +1454,7 @@ export default function App() {
                       label="Stop age"
                       value={contributionStopAge}
                       onChange={setContributionStopAge}
+                      onBlur={handleContributionStopAgeBlur}
                     />
                   ) : null}
                   <div className="display-mode-row">
