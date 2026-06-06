@@ -44,6 +44,11 @@ const STANDARD_CHART = "Standard";
 const BAR_CHART = "Bar graph";
 const CHART_MODES = [STANDARD_CHART, BAR_CHART] as const;
 const BAR_GAP_PX = 2;
+const PROJECTION_LEGEND_ITEMS = [
+  { label: "Contributions", color: "#18b6ff" },
+  { label: "Growth", color: "#20bf75" },
+  { label: "Drawdown", color: "#ff4c9a" },
+] as const;
 const STOP_CONTRIBUTING_AT_FIRE = "FIRE goal";
 const STOP_CONTRIBUTING_AT_AGE = "Specific age";
 const THEME_STORAGE_KEY = "fire-calculator-theme";
@@ -71,8 +76,8 @@ function ActiveBar(props: BarShapeProps) {
 type AssetInput = {
   key: AssetKey;
   name: string;
-  allocation: number;
-  returnRate: number;
+  currentValue: string;
+  returnRate: string;
 };
 
 type ProjectionPoint = {
@@ -113,6 +118,13 @@ type AccumulationRecord = {
   year: number;
   endingBalance: number;
   rollingContribution: number;
+  assetBalances: ProjectedAssetBalance[];
+};
+
+type ProjectedAssetBalance = {
+  key: AssetKey;
+  balance: number;
+  returnRate: number;
 };
 
 function numberFromInput(value: string, fallback = 0): number {
@@ -125,6 +137,17 @@ function optionalNumberFromInput(value: string): number | null {
 
   const parsed = Number(value.replace(/[$,%\s,]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function decimalInput(value: string, decimalPlaces: number): string {
+  const isNegative = value.trim().startsWith("-");
+  const numeric = value.replace(/[^\d.]/g, "");
+  const [integer = "", ...decimalParts] = numeric.split(".");
+  const decimal = decimalParts.join("").slice(0, decimalPlaces);
+  const sign = isNegative ? "-" : "";
+
+  if (value.includes(".")) return `${sign}${integer || "0"}.${decimal}`;
+  return `${sign}${integer}`;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -179,23 +202,82 @@ function growBalanceForOneYear(args: {
   return balance;
 }
 
+function assetsIncludeStocks(assets: ProjectedAssetBalance[]): boolean {
+  return assets.some((asset) => asset.key === "stocks");
+}
+
+function shouldAssetReceiveContributions(
+  asset: ProjectedAssetBalance,
+  assets: ProjectedAssetBalance[],
+): boolean {
+  return asset.key === "stocks" || !assetsIncludeStocks(assets);
+}
+
+function growAssetsForOneYear(
+  assets: ProjectedAssetBalance[],
+): ProjectedAssetBalance[] {
+  return assets.map((asset) => ({
+    ...asset,
+    balance: growBalanceForOneYear({
+      startingBalance: asset.balance,
+      monthlyContribution: 0,
+      annualContribution: 0,
+      annualReturnPct: asset.returnRate,
+    }),
+  }));
+}
+
+function addContributionToAssets(
+  assets: ProjectedAssetBalance[],
+  contribution: number,
+): ProjectedAssetBalance[] {
+  return assets.map((asset) =>
+    shouldAssetReceiveContributions(asset, assets)
+      ? { ...asset, balance: asset.balance + contribution }
+      : asset,
+  );
+}
+
+function withdrawFromAssets(
+  assets: ProjectedAssetBalance[],
+  withdrawal: number,
+): ProjectedAssetBalance[] {
+  const totalBalance = assets.reduce(
+    (total, asset) => total + asset.balance,
+    0,
+  );
+  if (totalBalance <= 0 || withdrawal <= 0) return assets;
+
+  return assets.map((asset) => ({
+    ...asset,
+    balance: Math.max(
+      asset.balance - withdrawal * (asset.balance / totalBalance),
+      0,
+    ),
+  }));
+}
+
 function projectAccumulationTimeline(args: {
-  initialBalance: number;
+  assets: ProjectedAssetBalance[];
   monthlyContribution: number;
   annualContribution: number;
-  annualReturnPct: number;
   years: number;
   contributionYears?: number;
 }): AccumulationRecord[] {
+  const initialAssets = args.assets.map((asset) => ({ ...asset }));
   const records: AccumulationRecord[] = [
     {
       year: 0,
-      endingBalance: args.initialBalance,
+      endingBalance: initialAssets.reduce(
+        (total, asset) => total + asset.balance,
+        0,
+      ),
       rollingContribution: 0,
+      assetBalances: initialAssets,
     },
   ];
 
-  let balance = args.initialBalance;
+  let assetBalances = initialAssets;
   let rollingContribution = 0;
 
   for (let year = 1; year <= args.years; year += 1) {
@@ -205,14 +287,37 @@ function projectAccumulationTimeline(args: {
     const annualContribution = shouldContribute ? args.annualContribution : 0;
     const totalContribution = annualContribution + monthlyContribution * 12;
     rollingContribution += totalContribution;
-    balance = growBalanceForOneYear({
-      startingBalance: balance,
-      monthlyContribution,
-      annualContribution,
-      annualReturnPct: args.annualReturnPct,
+    assetBalances = assetBalances.map((asset) => {
+      return {
+        ...asset,
+        balance: growBalanceForOneYear({
+          startingBalance: asset.balance,
+          monthlyContribution: shouldAssetReceiveContributions(
+            asset,
+            assetBalances,
+          )
+            ? monthlyContribution
+            : 0,
+          annualContribution: shouldAssetReceiveContributions(
+            asset,
+            assetBalances,
+          )
+            ? annualContribution
+            : 0,
+          annualReturnPct: asset.returnRate,
+        }),
+      };
     });
 
-    records.push({ year, endingBalance: balance, rollingContribution });
+    records.push({
+      year,
+      endingBalance: assetBalances.reduce(
+        (total, asset) => total + asset.balance,
+        0,
+      ),
+      rollingContribution,
+      assetBalances: assetBalances.map((asset) => ({ ...asset })),
+    });
   }
 
   return records;
@@ -245,8 +350,7 @@ function solveMonthlyContribution(args: {
   yearsToRetirement: number;
   expectedAnnualExpenses: number;
   annualContribution: number;
-  initialBalance: number;
-  annualReturnPct: number;
+  assets: ProjectedAssetBalance[];
   inflationRatePct: number;
   withdrawalRatePct: number;
   contributionYears?: number;
@@ -263,10 +367,9 @@ function solveMonthlyContribution(args: {
 
   const timelineFor = (monthlyContribution: number) =>
     projectAccumulationTimeline({
-      initialBalance: args.initialBalance,
+      assets: args.assets,
       monthlyContribution,
       annualContribution: args.annualContribution,
-      annualReturnPct: args.annualReturnPct,
       years: args.yearsToRetirement,
       contributionYears: args.contributionYears,
     });
@@ -308,17 +411,15 @@ function solveExpectedAnnualExpenses(args: {
   yearsToRetirement: number;
   monthlyContribution: number;
   annualContribution: number;
-  initialBalance: number;
-  annualReturnPct: number;
+  assets: ProjectedAssetBalance[];
   inflationRatePct: number;
   withdrawalRatePct: number;
   contributionYears?: number;
 }): { expectedAnnualExpenses: number; timeline: AccumulationRecord[] } {
   const timeline = projectAccumulationTimeline({
-    initialBalance: args.initialBalance,
+    assets: args.assets,
     monthlyContribution: args.monthlyContribution,
     annualContribution: args.annualContribution,
-    annualReturnPct: args.annualReturnPct,
     years: args.yearsToRetirement,
     contributionYears: args.contributionYears,
   });
@@ -333,48 +434,6 @@ function solveExpectedAnnualExpenses(args: {
     expectedAnnualExpenses: realPortfolio * (args.withdrawalRatePct / 100),
     timeline,
   };
-}
-
-function rebalanceAllocations(
-  assets: AssetInput[],
-  changedKey: AssetKey,
-  nextAllocation: number,
-): AssetInput[] {
-  const updated = assets.map((asset) =>
-    asset.key === changedKey
-      ? { ...asset, allocation: clamp(Math.round(nextAllocation), 0, 100) }
-      : { ...asset },
-  );
-  const reduceOrder: Record<AssetKey, AssetKey[]> = {
-    stocks: ["cash", "bonds"],
-    bonds: ["cash", "stocks"],
-    cash: ["bonds", "stocks"],
-  };
-
-  let total = updated.reduce((sum, asset) => sum + asset.allocation, 0);
-
-  if (total > 100) {
-    let overflow = total - 100;
-
-    for (const keyToReduce of reduceOrder[changedKey]) {
-      const asset = updated.find((candidate) => candidate.key === keyToReduce);
-      if (!asset || overflow <= 0) continue;
-
-      const reduction = Math.min(asset.allocation, overflow);
-      asset.allocation -= reduction;
-      overflow -= reduction;
-    }
-  }
-
-  total = updated.reduce((sum, asset) => sum + asset.allocation, 0);
-
-  if (total < 100) {
-    const balancingKey: AssetKey = changedKey === "cash" ? "stocks" : "cash";
-    const balancingAsset = updated.find((asset) => asset.key === balancingKey);
-    if (balancingAsset) balancingAsset.allocation += 100 - total;
-  }
-
-  return updated;
 }
 
 function calculatePlan(args: {
@@ -406,14 +465,33 @@ function calculatePlan(args: {
       : clamp(Math.round(args.desiredFireAge), currentAge, finalChartAge);
   const desiredYearsToRetirement =
     desiredFireAge === null ? null : desiredFireAge - currentAge;
-  const totalAllocation =
-    args.assets.reduce((total, asset) => total + asset.allocation, 0) || 100;
+  const assetBalances = args.assets.map((asset) => ({
+    ...asset,
+    balance: Math.max(numberFromInput(asset.currentValue), 0),
+    returnRate: numberFromInput(asset.returnRate),
+  }));
+  const projectedAssetBalances: ProjectedAssetBalance[] = assetBalances.map(
+    (asset) => ({
+      key: asset.key,
+      balance: asset.balance,
+      returnRate: asset.returnRate,
+    }),
+  );
+  const totalCurrentInvestments = assetBalances.reduce(
+    (total, asset) => total + asset.balance,
+    0,
+  );
+  const fallbackReturn =
+    assetBalances.find((asset) => asset.key === "stocks")?.returnRate ?? 0;
   const effectiveReturnPct =
-    args.assets.reduce(
-      (total, asset) =>
-        total + (asset.allocation / totalAllocation) * asset.returnRate,
-      0,
-    ) / 100;
+    totalCurrentInvestments > 0
+      ? assetBalances.reduce(
+          (total, asset) =>
+            total +
+            (asset.balance / totalCurrentInvestments) * asset.returnRate,
+          0,
+        ) / 100
+      : fallbackReturn / 100;
   const effectiveReturn = effectiveReturnPct * 100;
   const inflationRatePct = Math.max(args.inflationRate, 0);
   const initialBalance = Math.max(args.currentSavings, 0);
@@ -444,8 +522,7 @@ function calculatePlan(args: {
       yearsToRetirement,
       expectedAnnualExpenses,
       annualContribution,
-      initialBalance,
-      annualReturnPct: effectiveReturn,
+      assets: projectedAssetBalances,
       inflationRatePct,
       withdrawalRatePct: safeWithdrawalRatePct,
       contributionYears,
@@ -471,8 +548,7 @@ function calculatePlan(args: {
       yearsToRetirement,
       monthlyContribution,
       annualContribution,
-      initialBalance,
-      annualReturnPct: effectiveReturn,
+      assets: projectedAssetBalances,
       inflationRatePct,
       withdrawalRatePct: safeWithdrawalRatePct,
       contributionYears,
@@ -487,10 +563,9 @@ function calculatePlan(args: {
       safeWithdrawalRatePct,
     );
     const fullTimeline = projectAccumulationTimeline({
-      initialBalance,
+      assets: projectedAssetBalances,
       monthlyContribution,
       annualContribution,
-      annualReturnPct: effectiveReturn,
       years: accumulationHorizon,
       contributionYears,
     });
@@ -547,6 +622,10 @@ function calculatePlan(args: {
     });
   }
 
+  let retirementAssetBalances =
+    accumulationTimeline[accumulationTimeline.length - 1]?.assetBalances.map(
+      (asset) => ({ ...asset }),
+    ) ?? projectedAssetBalances.map((asset) => ({ ...asset }));
   let portfolio = portfolioAtRetirement;
   const contributions =
     initialBalance +
@@ -576,12 +655,20 @@ function calculatePlan(args: {
 
     if (postFireContribution > 0) {
       contributionBucket += postFireContribution;
+      retirementAssetBalances = addContributionToAssets(
+        retirementAssetBalances,
+        postFireContribution,
+      );
       portfolio += postFireContribution;
     }
 
     const plannedWithdrawal =
       expectedAnnualExpenses * inflationFactor(inflationRatePct, absoluteYear);
     const actualWithdrawal = Math.min(portfolio, plannedWithdrawal);
+    retirementAssetBalances = withdrawFromAssets(
+      retirementAssetBalances,
+      actualWithdrawal,
+    );
     const growthWithdrawal = Math.min(growthBucket, actualWithdrawal);
     const contributionWithdrawal = actualWithdrawal - growthWithdrawal;
 
@@ -598,7 +685,11 @@ function calculatePlan(args: {
       absoluteYear,
     );
     const balanceBeforeGrowth = portfolio;
-    portfolio *= 1 + effectiveReturnPct;
+    retirementAssetBalances = growAssetsForOneYear(retirementAssetBalances);
+    portfolio = retirementAssetBalances.reduce(
+      (total, asset) => total + asset.balance,
+      0,
+    );
     const investmentGrowth = portfolio - balanceBeforeGrowth;
     growthBucket += investmentGrowth;
     portfolio = contributionBucket + growthBucket;
@@ -771,8 +862,9 @@ function Stat(props: { label: string; value: string; icon: React.ReactNode }) {
 
 function AssetRow(props: {
   asset: AssetInput;
-  onAllocationChange: (value: number) => void;
-  onReturnChange: (value: number) => void;
+  showCurrentValue?: boolean;
+  onCurrentValueChange: (value: string) => void;
+  onReturnChange: (value: string) => void;
 }) {
   return (
     <div className="asset-row">
@@ -780,28 +872,25 @@ function AssetRow(props: {
         <strong>{props.asset.name}</strong>
       </div>
 
-      <label className="slider-row">
-        <span>Allocation</span>
-        <b>{props.asset.allocation}%</b>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          value={props.asset.allocation}
-          onChange={(event) =>
-            props.onAllocationChange(Number(event.target.value))
-          }
-        />
-      </label>
+      {props.showCurrentValue ? (
+        <label className="mini-field money-field">
+          <span>Current Savings</span>
+          <span className="field-affix">$</span>
+          <input
+            aria-label={`${props.asset.name} current investments`}
+            value={props.asset.currentValue}
+            onChange={(event) => props.onCurrentValueChange(event.target.value)}
+            inputMode="decimal"
+          />
+        </label>
+      ) : null}
 
       <label className="mini-field">
         <span>Nominal annual return</span>
         <input
           value={props.asset.returnRate}
           onChange={(event) =>
-            props.onReturnChange(
-              numberFromInput(event.target.value, props.asset.returnRate),
-            )
+            props.onReturnChange(decimalInput(event.target.value, 2))
           }
           inputMode="decimal"
         />
@@ -879,6 +968,29 @@ function ProjectionTooltip(props: {
   );
 }
 
+function ProjectionLegend() {
+  return (
+    <ul className="recharts-default-legend projection-legend">
+      {PROJECTION_LEGEND_ITEMS.map((item) => (
+        <li key={item.label} className="recharts-legend-item">
+          <span
+            className="recharts-legend-icon"
+            style={{
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              marginRight: 8,
+              borderRadius: "999px",
+              backgroundColor: item.color,
+            }}
+          />
+          <span>{item.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "light";
@@ -887,7 +999,6 @@ export default function App() {
       : "light";
   });
   const [age, setAge] = useState("23");
-  const [currentSavings, setCurrentSavings] = useState("936");
   const [monthlyContribution, setMonthlyContribution] = useState("411"); // 3618, 4118, 4618
   const [annualSpending, setAnnualSpending] = useState("70000");
   const [withdrawalRate, setWithdrawalRate] = useState("4.5");
@@ -908,16 +1019,36 @@ export default function App() {
     useState<ContributionStopMode>(STOP_CONTRIBUTING_AT_FIRE);
   const [contributionStopAge, setContributionStopAge] = useState("60");
   const [assets, setAssets] = useState<AssetInput[]>([
-    { key: "stocks", name: "Stocks / ETFs", allocation: 100, returnRate: 10 },
-    { key: "bonds", name: "Savings / Bonds", allocation: 0, returnRate: 3 },
-    { key: "cash", name: "Cash", allocation: 0, returnRate: 0 },
+    {
+      key: "stocks",
+      name: "Stocks",
+      currentValue: "936",
+      returnRate: "10",
+    },
+    {
+      key: "bonds",
+      name: "Savings / Bonds",
+      currentValue: "0",
+      returnRate: "3",
+    },
+    { key: "cash", name: "Cash", currentValue: "0", returnRate: "0" },
   ]);
+  const stockAsset = assets.find((asset) => asset.key === "stocks");
+  const bondsAsset = assets.find((asset) => asset.key === "bonds");
+  const cashAsset = assets.find((asset) => asset.key === "cash");
+  const currentInvestments = assets.reduce(
+    (total, asset) => total + Math.max(numberFromInput(asset.currentValue), 0),
+    0,
+  );
+  const savingsAndCash =
+    Math.max(numberFromInput(bondsAsset?.currentValue ?? "0"), 0) +
+    Math.max(numberFromInput(cashAsset?.currentValue ?? "0"), 0);
 
   const plan = useMemo(
     () =>
       calculatePlan({
         age: clamp(Math.round(numberFromInput(age, 30)), 0, MAX_SUPPORTED_AGE),
-        currentSavings: numberFromInput(currentSavings),
+        currentSavings: currentInvestments,
         desiredFireAge: optionalNumberFromInput(desiredFireAge),
         monthlyContribution: optionalNumberFromInput(monthlyContribution),
         contributionStopMode,
@@ -936,7 +1067,7 @@ export default function App() {
       }),
     [
       age,
-      currentSavings,
+      currentInvestments,
       monthlyContribution,
       desiredFireAge,
       contributionStopMode,
@@ -1009,10 +1140,6 @@ export default function App() {
     }));
   }, [displayMode, inflationRate, plan]);
 
-  const totalAllocation = assets.reduce(
-    (total, asset) => total + asset.allocation,
-    0,
-  );
   const inflationRateNumber = numberFromInput(inflationRate, 3);
   const displayedFireTarget = displayAmount(
     plan.futureFireTarget,
@@ -1070,10 +1197,6 @@ export default function App() {
         asset.key === key ? { ...asset, ...changes } : asset,
       ),
     );
-  }
-
-  function updateAllocation(key: AssetKey, allocation: number) {
-    setAssets((current) => rebalanceAllocations(current, key, allocation));
   }
 
   return (
@@ -1161,11 +1284,40 @@ export default function App() {
             <Panel title="Today">
               <Field label="Age" value={age} onChange={setAge} />
               <Field
-                label="Current savings"
-                value={currentSavings}
-                onChange={setCurrentSavings}
+                label="Stocks"
+                value={stockAsset?.currentValue ?? ""}
+                onChange={(currentValue) =>
+                  updateAsset("stocks", { currentValue })
+                }
                 prefix="$"
               />
+              <details className="today-breakdown">
+                <summary>
+                  <span>
+                    <PiggyBank size={16} aria-hidden="true" />
+                    Savings and Cash
+                  </span>
+                  <strong>{money(savingsAndCash)}</strong>
+                </summary>
+                <div className="today-breakdown-body">
+                  <Field
+                    label="Savings"
+                    value={bondsAsset?.currentValue ?? ""}
+                    onChange={(currentValue) =>
+                      updateAsset("bonds", { currentValue })
+                    }
+                    prefix="$"
+                  />
+                  <Field
+                    label="Cash"
+                    value={cashAsset?.currentValue ?? ""}
+                    onChange={(currentValue) =>
+                      updateAsset("cash", { currentValue })
+                    }
+                    prefix="$"
+                  />
+                </div>
+              </details>
               <Field
                 label="Saving monthly"
                 value={monthlyContribution}
@@ -1186,8 +1338,8 @@ export default function App() {
                     <AssetRow
                       key={asset.key}
                       asset={asset}
-                      onAllocationChange={(allocation) =>
-                        updateAllocation(asset.key, allocation)
+                      onCurrentValueChange={(currentValue) =>
+                        updateAsset(asset.key, { currentValue })
                       }
                       onReturnChange={(returnRate) =>
                         updateAsset(asset.key, { returnRate })
@@ -1208,8 +1360,8 @@ export default function App() {
                       <AssetRow
                         key={asset.key}
                         asset={asset}
-                        onAllocationChange={(allocation) =>
-                          updateAllocation(asset.key, allocation)
+                        onCurrentValueChange={(currentValue) =>
+                          updateAsset(asset.key, { currentValue })
                         }
                         onReturnChange={(returnRate) =>
                           updateAsset(asset.key, { returnRate })
@@ -1217,20 +1369,14 @@ export default function App() {
                       />
                     ))}
                 </div>
-                <div
-                  className={
-                    totalAllocation === 100
-                      ? "return-note"
-                      : "return-note warning"
-                  }
-                >
+                <div className="return-note">
                   <strong>
                     Effective nominal annual return:{" "}
                     {plan.effectiveReturn.toFixed(2)}%
                   </strong>
                   <span>
-                    Allocation total must equal 100%, so changing one allocation
-                    automatically rebalances the others.
+                    Current portfolio total across all categories:{" "}
+                    {money(currentInvestments)}
                   </span>
                 </div>
               </details>
@@ -1438,36 +1584,6 @@ export default function App() {
                           stopOpacity="0.2"
                         />
                       </linearGradient>
-                      <linearGradient
-                        id="barContributionGradient"
-                        x1="0"
-                        y1="0"
-                        x2="1"
-                        y2="0"
-                      >
-                        <stop offset="0%" stopColor="#5130ee" />
-                        <stop offset="100%" stopColor="#18b6ff" />
-                      </linearGradient>
-                      <linearGradient
-                        id="barGrowthGradient"
-                        x1="0"
-                        y1="0"
-                        x2="1"
-                        y2="0"
-                      >
-                        <stop offset="0%" stopColor="#20bf75" />
-                        <stop offset="100%" stopColor="#ffe45c" />
-                      </linearGradient>
-                      <linearGradient
-                        id="barWithdrawalGradient"
-                        x1="0"
-                        y1="0"
-                        x2="1"
-                        y2="0"
-                      >
-                        <stop offset="0%" stopColor="#ff4c9a" />
-                        <stop offset="100%" stopColor="#ff8a3d" />
-                      </linearGradient>
                     </defs>
                     <CartesianGrid
                       stroke={isDarkMode ? "#263550" : "#dfe9ff"}
@@ -1504,7 +1620,7 @@ export default function App() {
                     />
                     <Legend
                       verticalAlign="bottom"
-                      iconType="circle"
+                      content={<ProjectionLegend />}
                       wrapperStyle={{ paddingTop: 24 }}
                     />
                     {chartMode === BAR_CHART ? (
@@ -1576,7 +1692,7 @@ export default function App() {
                         <Area
                           type="monotone"
                           dataKey="withdrawals"
-                          name="Withdrawal"
+                          name="Drawdown"
                           stroke="#ff4c9a"
                           fill="url(#withdrawalGradient)"
                           fillOpacity={1}
@@ -1594,7 +1710,7 @@ export default function App() {
                           dataKey="withdrawalBar"
                           name="Drawdown"
                           stackId="assets"
-                          fill="url(#barWithdrawalGradient)"
+                          fill="#ff4c9a"
                           radius={[0, 0, 4, 4]}
                           shape={BarShape}
                           activeBar={ActiveBar}
@@ -1604,7 +1720,7 @@ export default function App() {
                           dataKey="contributionShade"
                           name="Contributions"
                           stackId="assets"
-                          fill="url(#barContributionGradient)"
+                          fill="#18b6ff"
                           radius={[0, 0, 0, 0]}
                           shape={BarShape}
                           activeBar={ActiveBar}
@@ -1614,7 +1730,7 @@ export default function App() {
                           dataKey="growthShade"
                           name="Growth"
                           stackId="assets"
-                          fill="url(#barGrowthGradient)"
+                          fill="#20bf75"
                           radius={[4, 4, 0, 0]}
                           shape={BarShape}
                           activeBar={ActiveBar}

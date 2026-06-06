@@ -297,7 +297,7 @@ h2 {
   min-height: 50px;
   border: 0;
   border-bottom: 1px solid rgba(81, 48, 238, 0.1);
-  background: linear-gradient(90deg, #5130ee, #8b5cf6);
+  background: linear-gradient(90deg, #79b9ff, #9dc5ff, #c8b9ff);
   color: #fff;
   cursor: pointer;
   font-size: 14px;
@@ -515,9 +515,9 @@ h2 {
 
 .segmented-control button.active,
 .chart-mode-toggle button.active {
-  background: linear-gradient(135deg, #5130ee, #ff4c9a);
+  background: linear-gradient(135deg, #8ec5ff, #9de7d2, #ffb8d7);
   color: #fff;
-  box-shadow: 0 12px 24px rgba(81, 48, 238, 0.22);
+  box-shadow: 0 12px 24px rgba(92, 138, 208, 0.22);
 }
 
 .asset-list {
@@ -576,6 +576,78 @@ input[type="range"] {
   font-size: 14px;
   font-weight: 750;
   text-align: left;
+}
+
+.money-field {
+  grid-template-columns: minmax(98px, 0.65fr) 28px minmax(0, 1fr);
+}
+
+.today-breakdown {
+  border: 1px solid rgba(81, 48, 238, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: inset 0 -10px 22px rgba(81, 48, 238, 0.035);
+  overflow: hidden;
+}
+
+.today-breakdown summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 12px;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 12px;
+  color: #333e63;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 850;
+  list-style: none;
+}
+
+.today-breakdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.today-breakdown summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #5130ee;
+  border-bottom: 2px solid #5130ee;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 160ms ease;
+}
+
+.today-breakdown[open] summary::after {
+  transform: rotate(225deg) translateY(-2px);
+}
+
+.today-breakdown summary > span,
+.today-breakdown summary strong {
+  display: inline-flex;
+  align-items: center;
+}
+
+.today-breakdown summary > span {
+  gap: 8px;
+}
+
+.today-breakdown summary svg {
+  color: #20bf75;
+}
+
+.today-breakdown summary strong {
+  color: #5130ee;
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.today-breakdown-body {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid rgba(81, 48, 238, 0.1);
+  padding: 12px;
 }
 
 .advanced-investments {
@@ -908,13 +980,13 @@ font-size: clamp(24px, 2.4vw, 36px);
   position: relative;
   z-index: 1;
   height: 100%;
+  width: 100%;
   min-width: 100%;
   min-height: 0;
 }
 
 .bar-chart-stage {
   box-sizing: border-box;
-  padding-inline: 10px;
 }
 
 .bar-chart-stage .recharts-bar-rectangles,
@@ -977,6 +1049,11 @@ animation: bar-chart-wipe-in 1250ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
 
 .recharts-legend-item {
   margin-right: 0 !important;
+}
+
+.projection-legend .recharts-legend-item {
+  display: inline-flex !important;
+  align-items: center;
 }
 
 .recharts-area-area {
@@ -1211,6 +1288,7 @@ animation: bar-chart-wipe-in 1250ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
 
 .theme-dark .field-control,
 .theme-dark .mini-field,
+.theme-dark .today-breakdown,
 .theme-dark .segmented-control,
 .theme-dark .chart-mode-toggle,
 .theme-dark .advanced-investments summary,
@@ -1227,9 +1305,30 @@ animation: bar-chart-wipe-in 1250ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
 }
 
 .theme-dark .field-affix,
+.theme-dark .today-breakdown summary strong,
 .theme-dark .advanced-investments summary,
 .theme-dark .tooltip-title {
   color: #8ec5ff;
+}
+
+.theme-dark .today-breakdown {
+  background: rgba(8, 17, 31, 0.5);
+}
+
+.theme-dark .today-breakdown summary {
+  color: #c3d2e8;
+}
+
+.theme-dark .today-breakdown summary::after {
+  border-color: #8ec5ff;
+}
+
+.theme-dark .today-breakdown summary svg {
+  color: #5ee0b4;
+}
+
+.theme-dark .today-breakdown-body {
+  border-top-color: rgba(142, 197, 255, 0.13);
 }
 
 .theme-dark .advanced-investments summary:hover {
@@ -1241,9 +1340,9 @@ animation: bar-chart-wipe-in 1250ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
 .theme-dark .controls-toggle,
 .theme-dark .segmented-control button.active,
 .theme-dark .chart-mode-toggle button.active {
-  background: linear-gradient(135deg, #2463eb, #be3d82);
+  background: linear-gradient(135deg, #4c8ef0, #5ec7b0, #d772a8);
   color: #fff;
-  box-shadow: 0 13px 28px rgba(36, 99, 235, 0.24);
+  box-shadow: 0 13px 28px rgba(44, 104, 184, 0.24);
 }
 
 .theme-dark .controls-toggle {
