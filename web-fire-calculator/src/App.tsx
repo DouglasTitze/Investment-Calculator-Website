@@ -1166,7 +1166,7 @@ export default function App() {
                 </summary>
                 <div className="today-breakdown-body">
                   <Field
-                    label="Savings"
+                    label="High Yield Savings"
                     value={bondsAsset?.currentValue ?? ""}
                     onChange={(currentValue) =>
                       updateAsset("bonds", { currentValue })
@@ -1184,11 +1184,11 @@ export default function App() {
                 </div>
               </details>
               <Field
-                label="Saving monthly"
+                label="Monthly Contrib."
                 value={monthlyContribution}
                 onChange={setMonthlyContribution}
                 prefix="$"
-                help="Assumption: each monthly contribution is invested at the start of the month."
+                help="Assumption: Each monthly contribution is invested at the start of the month. Biweekly contributions outperform monthly by only 0.2% over 30 years."
               />
             </Panel>
 
