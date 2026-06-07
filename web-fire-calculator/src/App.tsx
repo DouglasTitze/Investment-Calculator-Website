@@ -33,7 +33,6 @@ const DEFAULT_FINAL_CHART_AGE = 85;
 const MAX_SUPPORTED_AGE = 150;
 const MAX_ACCUMULATION_YEARS = MAX_SUPPORTED_AGE;
 const MAX_DRAWDOWN_YEARS = MAX_SUPPORTED_AGE;
-const MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR = 1_000_000;
 const DISPLAY_TODAYS_DOLLARS = "Today's dollars";
 const DISPLAY_NOMINAL_DOLLARS = "Nominal dollars";
 const DISPLAY_MODES = [
@@ -94,10 +93,7 @@ type ProjectionPoint = {
 };
 
 type Plan = {
-  calculatedField:
-    | "Years to Retirement"
-    | "Monthly Contributions"
-    | "Expected Annual Expenses";
+  calculatedField: "Years to Retirement";
   fireReachable: boolean;
   warning: string | null;
   todayFireTarget: number;
@@ -346,100 +342,9 @@ function todayValue(
   return futureValueAmount / inflationFactor(inflationRatePct, year);
 }
 
-function solveMonthlyContribution(args: {
-  yearsToRetirement: number;
-  expectedAnnualExpenses: number;
-  annualContribution: number;
-  assets: ProjectedAssetBalance[];
-  inflationRatePct: number;
-  withdrawalRatePct: number;
-  contributionYears?: number;
-}): { monthlyContribution: number; timeline: AccumulationRecord[] } {
-  const todayTarget = retirementTarget(
-    args.expectedAnnualExpenses,
-    args.withdrawalRatePct,
-  );
-  const futureTarget = futureValue(
-    todayTarget,
-    args.inflationRatePct,
-    args.yearsToRetirement,
-  );
-
-  const timelineFor = (monthlyContribution: number) =>
-    projectAccumulationTimeline({
-      assets: args.assets,
-      monthlyContribution,
-      annualContribution: args.annualContribution,
-      years: args.yearsToRetirement,
-      contributionYears: args.contributionYears,
-    });
-
-  const zeroTimeline = timelineFor(0);
-
-  if (zeroTimeline[zeroTimeline.length - 1].endingBalance >= futureTarget) {
-    return { monthlyContribution: 0, timeline: zeroTimeline };
-  }
-
-  let low = 0;
-  let high = Math.max(25, args.expectedAnnualExpenses / 12);
-
-  while (
-    timelineFor(high)[timelineFor(high).length - 1].endingBalance < futureTarget
-  ) {
-    high *= 2;
-
-    if (high > MAX_REQUIRED_CONTRIBUTION_BEFORE_ERROR) {
-      break;
-    }
-  }
-
-  for (let iteration = 0; iteration < 100; iteration += 1) {
-    const mid = (low + high) / 2;
-    const finalBalance = timelineFor(mid)[args.yearsToRetirement].endingBalance;
-
-    if (finalBalance >= futureTarget) {
-      high = mid;
-    } else {
-      low = mid;
-    }
-  }
-
-  return { monthlyContribution: high, timeline: timelineFor(high) };
-}
-
-function solveExpectedAnnualExpenses(args: {
-  yearsToRetirement: number;
-  monthlyContribution: number;
-  annualContribution: number;
-  assets: ProjectedAssetBalance[];
-  inflationRatePct: number;
-  withdrawalRatePct: number;
-  contributionYears?: number;
-}): { expectedAnnualExpenses: number; timeline: AccumulationRecord[] } {
-  const timeline = projectAccumulationTimeline({
-    assets: args.assets,
-    monthlyContribution: args.monthlyContribution,
-    annualContribution: args.annualContribution,
-    years: args.yearsToRetirement,
-    contributionYears: args.contributionYears,
-  });
-  const nominalPortfolio = timeline[timeline.length - 1].endingBalance;
-  const realPortfolio = todayValue(
-    nominalPortfolio,
-    args.inflationRatePct,
-    args.yearsToRetirement,
-  );
-
-  return {
-    expectedAnnualExpenses: realPortfolio * (args.withdrawalRatePct / 100),
-    timeline,
-  };
-}
-
 function calculatePlan(args: {
   age: number;
   currentSavings: number;
-  desiredFireAge: number | null;
   monthlyContribution: number | null;
   contributionStopMode: ContributionStopMode;
   contributionStopAge: number;
@@ -459,12 +364,6 @@ function calculatePlan(args: {
   );
   const maxYearsByAge = Math.max(finalChartAge - currentAge, 0);
   const accumulationHorizon = Math.min(MAX_ACCUMULATION_YEARS, maxYearsByAge);
-  const desiredFireAge =
-    args.desiredFireAge === null
-      ? null
-      : clamp(Math.round(args.desiredFireAge), currentAge, finalChartAge);
-  const desiredYearsToRetirement =
-    desiredFireAge === null ? null : desiredFireAge - currentAge;
   const assetBalances = args.assets.map((asset) => ({
     ...asset,
     balance: Math.max(numberFromInput(asset.currentValue), 0),
@@ -504,97 +403,45 @@ function calculatePlan(args: {
         )
       : undefined;
 
-  let calculatedField: Plan["calculatedField"];
-  let monthlyContribution = Math.max(args.monthlyContribution ?? 0, 0);
-  let expectedAnnualExpenses = Math.max(args.annualSpending ?? 0, 0);
+  const calculatedField: Plan["calculatedField"] = "Years to Retirement";
+  const monthlyContribution = Math.max(args.monthlyContribution ?? 0, 0);
+  const expectedAnnualExpenses = Math.max(args.annualSpending ?? 0, 0);
   let accumulationTimeline: AccumulationRecord[];
   let yearsToRetirement: number;
   let fireReachable: boolean;
 
-  if (
-    args.monthlyContribution === null &&
-    args.annualSpending !== null &&
-    desiredYearsToRetirement !== null
-  ) {
-    calculatedField = "Monthly Contributions";
-    yearsToRetirement = desiredYearsToRetirement;
-    const solved = solveMonthlyContribution({
-      yearsToRetirement,
-      expectedAnnualExpenses,
-      annualContribution,
-      assets: projectedAssetBalances,
-      inflationRatePct,
-      withdrawalRatePct: safeWithdrawalRatePct,
-      contributionYears,
-    });
-    monthlyContribution = solved.monthlyContribution;
-    accumulationTimeline = solved.timeline;
-    const futureTarget = futureValue(
-      retirementTarget(expectedAnnualExpenses, safeWithdrawalRatePct),
-      inflationRatePct,
-      yearsToRetirement,
-    );
-    fireReachable =
-      accumulationTimeline[accumulationTimeline.length - 1].endingBalance >=
-      futureTarget;
-  } else if (
-    args.annualSpending === null &&
-    args.monthlyContribution !== null &&
-    desiredYearsToRetirement !== null
-  ) {
-    calculatedField = "Expected Annual Expenses";
-    yearsToRetirement = desiredYearsToRetirement;
-    const solved = solveExpectedAnnualExpenses({
-      yearsToRetirement,
-      monthlyContribution,
-      annualContribution,
-      assets: projectedAssetBalances,
-      inflationRatePct,
-      withdrawalRatePct: safeWithdrawalRatePct,
-      contributionYears,
-    });
-    expectedAnnualExpenses = solved.expectedAnnualExpenses;
-    accumulationTimeline = solved.timeline;
-    fireReachable = expectedAnnualExpenses > 0;
-  } else {
-    calculatedField = "Years to Retirement";
-    const todayFireTarget = retirementTarget(
-      expectedAnnualExpenses,
-      safeWithdrawalRatePct,
-    );
-    const fullTimeline = projectAccumulationTimeline({
-      assets: projectedAssetBalances,
-      monthlyContribution,
-      annualContribution,
-      years: accumulationHorizon,
-      contributionYears,
-    });
-
-    const reachedRecord = fullTimeline.find((record) => {
-      const futureTarget = futureValue(
-        todayFireTarget,
-        inflationRatePct,
-        record.year,
-      );
-      return record.endingBalance >= futureTarget;
-    });
-
-    if (reachedRecord) {
-      yearsToRetirement = reachedRecord.year;
-      fireReachable = true;
-      accumulationTimeline = fullTimeline.slice(0, yearsToRetirement + 1);
-    } else {
-      yearsToRetirement = accumulationHorizon;
-      fireReachable = false;
-      accumulationTimeline = fullTimeline;
-    }
-  }
-
-  const annualSavings = monthlyContribution * 12 + annualContribution;
   const todayFireTarget = retirementTarget(
     expectedAnnualExpenses,
     safeWithdrawalRatePct,
   );
+  const fullTimeline = projectAccumulationTimeline({
+    assets: projectedAssetBalances,
+    monthlyContribution,
+    annualContribution,
+    years: accumulationHorizon,
+    contributionYears,
+  });
+
+  const reachedRecord = fullTimeline.find((record) => {
+    const futureTarget = futureValue(
+      todayFireTarget,
+      inflationRatePct,
+      record.year,
+    );
+    return record.endingBalance >= futureTarget;
+  });
+
+  if (reachedRecord) {
+    yearsToRetirement = reachedRecord.year;
+    fireReachable = true;
+    accumulationTimeline = fullTimeline.slice(0, yearsToRetirement + 1);
+  } else {
+    yearsToRetirement = accumulationHorizon;
+    fireReachable = false;
+    accumulationTimeline = fullTimeline;
+  }
+
+  const annualSavings = monthlyContribution * 12 + annualContribution;
   const futureFireTarget = futureValue(
     todayFireTarget,
     inflationRatePct,
@@ -1005,7 +852,6 @@ export default function App() {
   const [annualSpending, setAnnualSpending] = useState("70000");
   const [withdrawalRate, setWithdrawalRate] = useState("4.5");
   const [inflationRate, setInflationRate] = useState("3");
-  const [desiredFireAge, setDesiredFireAge] = useState("");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(
     DISPLAY_TODAYS_DOLLARS,
   );
@@ -1075,7 +921,6 @@ export default function App() {
       calculatePlan({
         age: clamp(Math.round(numberFromInput(age, 30)), 0, MAX_SUPPORTED_AGE),
         currentSavings: currentInvestments,
-        desiredFireAge: optionalNumberFromInput(desiredFireAge),
         monthlyContribution: optionalNumberFromInput(monthlyContribution),
         contributionStopMode,
         contributionStopAge: clamp(
@@ -1095,7 +940,6 @@ export default function App() {
       age,
       currentInvestments,
       monthlyContribution,
-      desiredFireAge,
       contributionStopMode,
       contributionStopAge,
       annualSpending,
@@ -1173,12 +1017,7 @@ export default function App() {
     inflationRateNumber,
     plan.yearsToRetirement,
   );
-  const calculatedValue =
-    plan.calculatedField === "Monthly Contributions"
-      ? money(plan.monthlyContribution, 2)
-      : plan.calculatedField === "Expected Annual Expenses"
-        ? money(plan.annualSpending, 2)
-        : `${plan.fireReachable ? plan.yearsToRetirement : `>${plan.yearsToRetirement}`} years`;
+  const calculatedValue = `${plan.fireReachable ? plan.yearsToRetirement : `>${plan.yearsToRetirement}`} years`;
 
   const calculatorLayoutRef = useRef<HTMLDivElement>(null);
   const projectionCardRef = useRef<HTMLElement>(null);
@@ -1349,10 +1188,7 @@ export default function App() {
                 value={monthlyContribution}
                 onChange={setMonthlyContribution}
                 prefix="$"
-                help={[
-                  "Leave this blank to calculate the monthly savings needed for your desired FIRE age.",
-                  "Assumption: each monthly contribution is invested at the start of the month.",
-                ].join("\n\n")}
+                help="Assumption: each monthly contribution is invested at the start of the month."
               />
             </Panel>
 
@@ -1414,7 +1250,6 @@ export default function App() {
                 value={annualSpending}
                 onChange={setAnnualSpending}
                 prefix="$"
-                help="Leave this blank to calculate the annual spending level supported by your savings and desired FIRE age."
               />
               <Field
                 label="Withdrawal rate"
@@ -1436,12 +1271,6 @@ export default function App() {
                 </summary>
 
                 <div className="advanced-settings-body">
-                  <Field
-                    label="Desired FIRE age"
-                    value={desiredFireAge}
-                    onChange={setDesiredFireAge}
-                    help="Used when monthly savings or annual spending is left blank."
-                  />
                   <div className="display-mode-row">
                     <span>Contribute until</span>
                     <ContributionStopToggle
